@@ -8,12 +8,12 @@
     Title="Asignación del Cielo Bible"
     mc:Ignorable="d">
 
-    <!-- Acrylic reads desktop wallpaper for a translucent Fluent glass look -->
+    <!-- Mica is more stable than DesktopAcrylic + transparent WebView2 -->
     <Window.SystemBackdrop>
-        <DesktopAcrylicBackdrop />
+        <MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
-    <Grid Background="Transparent">
+    <Grid Background="#FF0B0F16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -28,6 +28,6 @@
             </TitleBar.IconSource>
         </TitleBar>
 
-        <Frame x:Name="RootFrame" Grid.Row="1" Background="Transparent" />
+        <Frame x:Name="RootFrame" Grid.Row="1" Background="#FF0B0F16" />
     </Grid>
 </Window>

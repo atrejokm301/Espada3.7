@@ -173,21 +173,25 @@
     html[data-theme="fluent-glass"] #app {
       background: transparent !important;
     }
-    /* Blur only large chrome surfaces — NOT every button (that crashes WebView2
-       when the Bible list / verse tokens rebuild with 50+ modules). */
-    html[data-theme="fluent-glass"] header.app-header,
-    html[data-theme="fluent-glass"] nav.tabs,
-    html[data-theme="fluent-glass"] .modbar,
-    html[data-theme="fluent-glass"] .card,
-    html[data-theme="fluent-glass"] .modal,
-    html[data-theme="fluent-glass"] .ctx-menu,
-    html[data-theme="fluent-glass"] .pill-dd-panel {
-      backdrop-filter: var(--glass-blur);
-      -webkit-backdrop-filter: var(--glass-blur);
+    /* Stability: NO backdrop-filter under WebView2 — it has crashed the renderer
+       on this host when lists rebuild (Bible switch, etc.). Glass look uses
+       solid translucent colors only. */
+    html[data-theme="fluent-glass"] {
+      --panel: rgba(18, 22, 34, 0.94);
+      --panel-2: rgba(22, 28, 40, 0.96);
+      --input-bg: rgba(10, 14, 22, 0.96);
+      --header-grad: linear-gradient(90deg, #10141e, #161c2a, #10141e);
+      --tabs-bg: #0e121a;
+      --bg: #0b0f16;
+    }
+    html[data-theme="fluent-glass"],
+    html[data-theme="fluent-glass"] body,
+    html[data-theme="fluent-glass"] #app {
+      background: #0b0f16 !important;
     }
     html[data-theme="fluent-glass"] .card {
-      border-color: rgba(255, 255, 255, 0.16);
-      box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.14);
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     }
     html[data-theme="fluent-glass"] nav.tabs button.active {
       background: rgba(125, 211, 252, 0.14);
@@ -197,7 +201,7 @@
       background: rgba(255, 255, 255, 0.08);
     }
     html[data-theme="fluent-glass"] .pill-dd-panel {
-      background: rgba(16, 20, 30, 0.82);
+      background: rgba(16, 20, 30, 0.98);
     }
     /* Subtle host chip when running under WinUI */
     .host-chip {

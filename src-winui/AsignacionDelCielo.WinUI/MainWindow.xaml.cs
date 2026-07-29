@@ -1,3 +1,4 @@
+using AsignacionDelCielo_WinUI.Services;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Windows.Graphics;
@@ -17,12 +18,11 @@ public sealed partial class MainWindow : Window
         {
             AppWindow.SetIcon("Assets/AppIcon.ico");
         }
-        catch
+        catch (Exception ex)
         {
-            // Icon is optional in early scaffolding.
+            CrashLog.Write("SetIcon failed", ex);
         }
 
-        // Comfortable study layout (matches Tauri defaults).
         var size = new SizeInt32(1280, 800);
         AppWindow.Resize(size);
 

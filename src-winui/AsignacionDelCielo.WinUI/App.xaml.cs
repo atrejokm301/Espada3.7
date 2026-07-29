@@ -1,44 +1,67 @@
-﻿using Windows.ApplicationModel;
-using Windows.ApplicationModel.Activation;
-using Windows.Foundation;
-using Windows.Foundation.Collections;
+using AsignacionDelCielo_WinUI.Services;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
-using Microsoft.UI.Xaml.Data;
-using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Navigation;
-using Microsoft.UI.Xaml.Shapes;
-
-// To learn more about WinUI, the WinUI project structure,
-// and more about our project templates, see: http://aka.ms/winui-project-info.
 
 namespace AsignacionDelCielo_WinUI;
 
-/// <summary>
-/// Provides application-specific behavior to supplement the default Application class.
-/// </summary>
 public partial class App : Application
 {
     private Window? _window;
-    
-    /// <summary>
-    /// Initializes the singleton application object.  This is the first line of authored code
-    /// executed, and as such is the logical equivalent of main() or WinMain().
-    /// </summary>
+
+    /// <summary>Process-lifetime API host (survives page navigations).</summary>
+    public static ApiHost? SharedApi { get; set; }
+
     public App()
     {
+        // Catch managed crashes so we get a log instead of a silent death.
+        UnhandledException += (_, e) =>
+        {
+            CrashLog.Write("App.UnhandledException", e.Exception);
+            e.Handled = true; // try to keep the process alive when possible
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            CrashLog.Write(
+                "AppDomain.UnhandledException",
+                e.ExceptionObject as Exception);
+        };
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            CrashLog.Write("TaskScheduler.UnobservedTaskException", e.Exception);
+            e.SetObserved();
+        };
+
         InitializeComponent();
+        CrashLog.Write("App starting");
     }
 
-    /// <summary>
-    /// Invoked when the application is launched.
-    /// </summary>
-    /// <param name="args">Details about the launch request and process.</param>
-    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        try
+        {
+            SharedApi = new ApiHost();
+            await SharedApi.EnsureRunningAsync();
+            CrashLog.Write($"adc-api ready at {SharedApi.BaseUrl}");
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("Failed to start adc-api at launch", ex);
+            // Still open the window so the user sees the error overlay.
+        }
+
         _window = new MainWindow();
+        _window.Closed += (_, _) =>
+        {
+            CrashLog.Write("MainWindow closed");
+            try
+            {
+                SharedApi?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                CrashLog.Write("SharedApi dispose failed", ex);
+            }
+            SharedApi = null;
+        };
         _window.Activate();
     }
 }
