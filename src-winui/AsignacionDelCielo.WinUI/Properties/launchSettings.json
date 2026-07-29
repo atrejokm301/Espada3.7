@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "AsignacionDelCielo.WinUI (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "AsignacionDelCielo.WinUI (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

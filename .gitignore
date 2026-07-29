@@ -29,8 +29,12 @@ src-tauri/target
 src-tauri/gen/schemas/*.json
 !src-tauri/gen/schemas/.gitkeep
 
-# WinUI / .NET
-**/bin/
+# WinUI / .NET (do not use **/bin/ — that would ignore Rust src/bin)
+**/bin/Debug/
+**/bin/Release/
+**/bin/x64/
+**/bin/x86/
+**/bin/ARM64/
 **/obj/
 **/.vs/
 *.user

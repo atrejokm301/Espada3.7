@@ -1,8 +1,11 @@
 # Asignación del Cielo Bible
 
-App de estudio bíblico **offline** (Tauri 2 + React + TypeScript + Tailwind).
+App de estudio bíblico **offline** (Tauri 2 + UI vanilla en `ui/index.html`).
 
 Tabs: **Biblia · Comentario · Diccionario · Léxico**
+
+> **WinUI 3 preview** (branch `feature/winui3-shell`): same features via Acrylic + WebView2.  
+> See [`src-winui/README.md`](src-winui/README.md) and run `.\scripts\run-winui.ps1`.
 
 ## Estado actual (Fase 2 — e-Sword real)
 

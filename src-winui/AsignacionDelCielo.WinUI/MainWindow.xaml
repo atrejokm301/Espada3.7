@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Window
+    x:Class="AsignacionDelCielo_WinUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Title="Asignación del Cielo Bible"
+    mc:Ignorable="d">
+
+    <!-- Acrylic reads desktop wallpaper for a translucent Fluent glass look -->
+    <Window.SystemBackdrop>
+        <DesktopAcrylicBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid Background="Transparent">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TitleBar
+            x:Name="AppTitleBar"
+            Title="Asignación del Cielo Bible"
+            Subtitle="WinUI 3 · preview">
+            <TitleBar.IconSource>
+                <ImageIconSource ImageSource="Assets/AppIcon.ico" />
+            </TitleBar.IconSource>
+        </TitleBar>
+
+        <Frame x:Name="RootFrame" Grid.Row="1" Background="Transparent" />
+    </Grid>
+</Window>

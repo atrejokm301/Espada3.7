@@ -1,4 +1,5 @@
 mod esword;
+pub mod api_dispatch;
 
 use esword::{
     get_chapter, get_commentaries, list_books, list_dictionary_topics, lookup_dictionary,

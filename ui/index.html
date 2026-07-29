@@ -138,11 +138,55 @@
       --mark-violet-bg: rgba(139,92,246,.14);--mark-violet-fg: #4c1d95; --mark-violet-bd: rgba(124,58,237,.35);
       --mark-peach-bg: rgba(249,115,22,.14); --mark-peach-fg: #7c2d12;  --mark-peach-bd: rgba(234,88,12,.35);
     }
+    /* WinUI 3 / Acrylic: translucent panels so system backdrop shows through */
+    [data-theme="fluent-glass"] {
+      --bg: transparent;
+      --panel: rgba(20, 24, 32, 0.42);
+      --panel-2: rgba(28, 32, 42, 0.38);
+      --border: rgba(255, 255, 255, 0.12);
+      --text: #f3f6fb;
+      --muted: rgba(226, 232, 240, 0.72);
+      --accent: #7dd3fc;
+      --accent-soft: rgba(125, 211, 252, 0.16);
+      --sky: #bae6fd;
+      --ok: #4ade80;
+      --jesus: #f87171;
+      --hl-bg: rgba(125, 211, 252, 0.22);
+      --hl-fg: #e0f2fe;
+      --hover-row: rgba(255, 255, 255, 0.06);
+      --input-bg: rgba(8, 12, 20, 0.35);
+      --header-grad: linear-gradient(90deg, rgba(15,18,28,.45), rgba(30,40,60,.35), rgba(15,18,28,.45));
+      --tabs-bg: rgba(12, 16, 24, 0.32);
+      --shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+      --card-radius: 16px;
+      --mark-gold-bg: rgba(251,191,36,.28);   --mark-gold-fg: #fef3c7;  --mark-gold-bd: rgba(251,191,36,.5);
+      --mark-sky-bg: rgba(56,189,248,.24);    --mark-sky-fg: #e0f2fe;   --mark-sky-bd: rgba(56,189,248,.45);
+      --mark-rose-bg: rgba(251,113,133,.24);  --mark-rose-fg: #ffe4e6;  --mark-rose-bd: rgba(251,113,133,.45);
+      --mark-lime-bg: rgba(163,230,53,.22);   --mark-lime-fg: #ecfccb;  --mark-lime-bd: rgba(163,230,53,.45);
+      --mark-violet-bg: rgba(167,139,250,.26);--mark-violet-fg: #ede9fe;--mark-violet-bd: rgba(167,139,250,.5);
+      --mark-peach-bg: rgba(251,146,60,.24);  --mark-peach-fg: #ffedd5; --mark-peach-bd: rgba(251,146,60,.45);
+    }
+    [data-theme="fluent-glass"] html,
+    html[data-theme="fluent-glass"],
+    [data-theme="fluent-glass"] body {
+      background: transparent !important;
+    }
+    [data-theme="fluent-glass"] header.app-header,
+    [data-theme="fluent-glass"] .tabs,
+    [data-theme="fluent-glass"] .panel,
+    [data-theme="fluent-glass"] .card,
+    [data-theme="fluent-glass"] .side,
+    [data-theme="fluent-glass"] .verse-list,
+    [data-theme="fluent-glass"] .modal,
+    [data-theme="fluent-glass"] .drawer {
+      backdrop-filter: blur(22px) saturate(1.35);
+      -webkit-backdrop-filter: blur(22px) saturate(1.35);
+    }
     * { box-sizing: border-box; }
     html, body {
       margin: 0; height: 100%;
       background: var(--bg); color: var(--text);
-      font-family: "Segoe UI", system-ui, sans-serif;
+      font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
       transition: background .2s ease, color .2s ease;
     }
     #app { display: flex; flex-direction: column; height: 100%; position: relative; }
@@ -1475,11 +1519,35 @@
   }
 
   function getInvoke() {
+    // 1) Tauri desktop host
     if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
       return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
     }
     if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
       return window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+    }
+    // 2) WinUI 3 host → Rust adc-api sidecar (same command names)
+    if (window.__ADC_API_BASE__) {
+      var base = String(window.__ADC_API_BASE__).replace(/\/$/, "");
+      return function adcInvoke(cmd, args) {
+        return fetch(base + "/invoke", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cmd: cmd, args: args || {} })
+        }).then(function (res) {
+          return res.json().then(function (body) {
+            if (!res.ok) {
+              throw new Error((body && body.error) || ("HTTP " + res.status));
+            }
+            if (body && body.ok === false) {
+              throw new Error(body.error || "Error del API");
+            }
+            return body && Object.prototype.hasOwnProperty.call(body, "result")
+              ? body.result
+              : body;
+          });
+        });
+      };
     }
     return null;
   }
@@ -1488,7 +1556,7 @@
     var inv = getInvoke();
     if (!inv) {
       return Promise.reject(new Error(
-        "No hay API Tauri. Abrí la ventana de la app (no el navegador)."
+        "No hay API (Tauri o WinUI/adc-api). Abrí la ventana de escritorio de la app."
       ));
     }
     return inv(cmd, args || {});
@@ -1583,6 +1651,14 @@
       swatch: "#000000",
       swatchText: "#fafafa",
       accent: "#60a5fa"
+    },
+    {
+      id: "fluent-glass",
+      name: "Fluent Glass",
+      desc: "Translúcido para WinUI 3 (Acrylic/Mica). Deja ver el fondo del escritorio.",
+      swatch: "rgba(30,40,55,.55)",
+      swatchText: "#e0f2fe",
+      accent: "#7dd3fc"
     }
   ];
 
@@ -1935,9 +2011,13 @@
     renderThemeGrid();
   }
 
+  function defaultThemeId() {
+    return window.__ADC_HOST__ === "winui3" ? "fluent-glass" : "true-dark";
+  }
+
   function loadSavedTheme() {
-    var id = "true-dark";
-    try { id = localStorage.getItem(THEME_KEY) || "true-dark"; } catch (e) {}
+    var id = defaultThemeId();
+    try { id = localStorage.getItem(THEME_KEY) || defaultThemeId(); } catch (e) {}
     applyTheme(id);
   }
 
@@ -5285,15 +5365,21 @@
   }
 
   function boot() {
-    setBoot("Conectando con Tauri…");
+    var hostHint = window.__ADC_HOST__ === "winui3"
+      ? "Conectando con WinUI 3 + adc-api…"
+      : "Conectando con Tauri…";
+    setBoot(hostHint);
     if (!getInvoke()) {
       setTimeout(function () {
         if (!getInvoke()) {
-          setBoot("Sin API Tauri. Ejecutá: cargo run (en src-tauri)", true);
+          setBoot(
+            "Sin API. Usá Tauri (cargo run) o WinUI (scripts\\run-winui.ps1).",
+            true
+          );
           return;
         }
         start();
-      }, 300);
+      }, 400);
       return;
     }
     start();
@@ -5414,9 +5500,10 @@
 
   // Apply theme ASAP (even on boot screen)
   try {
-    var early = localStorage.getItem(THEME_KEY) || "true-dark";
-    // Removed themes fall back to true-dark
-    if (early === "liquid-glass") early = "true-dark";
+    var earlyDefault = window.__ADC_HOST__ === "winui3" ? "fluent-glass" : "true-dark";
+    var early = localStorage.getItem(THEME_KEY) || earlyDefault;
+    // Removed themes fall back to default for this host
+    if (early === "liquid-glass") early = earlyDefault;
     document.documentElement.setAttribute("data-theme", early);
     document.documentElement.removeAttribute("data-glass");
   } catch (e) {}
