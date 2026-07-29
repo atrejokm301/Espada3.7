@@ -22,7 +22,7 @@
         <TitleBar
             x:Name="AppTitleBar"
             Title="Asignación del Cielo Bible"
-            Subtitle="WinUI 3 · preview">
+            Subtitle="Fluent · offline">
             <TitleBar.IconSource>
                 <ImageIconSource ImageSource="Assets/AppIcon.ico" />
             </TitleBar.IconSource>

@@ -52,14 +52,34 @@ $env:ADC_API_PORT = "17865"
 
 Write-Host "==> API: $apiExe" -ForegroundColor DarkGray
 Write-Host "==> UI : $($env:ADC_UI_DIR)" -ForegroundColor DarkGray
-Write-Host "==> Running WinUI 3 host ($DotNetConfig | x64)…" -ForegroundColor Cyan
+Write-Host "==> Building WinUI 3 host ($DotNetConfig | x64, self-contained)…" -ForegroundColor Cyan
 
+$dotnet = "C:\Program Files\dotnet\dotnet.exe"
 Push-Location $winui
 try {
-  & "C:\Program Files\dotnet\dotnet.exe" run -c $DotNetConfig -p:Platform=x64 --no-restore 2>$null
-  if ($LASTEXITCODE -ne 0) {
-    & "C:\Program Files\dotnet\dotnet.exe" restore
-    & "C:\Program Files\dotnet\dotnet.exe" run -c $DotNetConfig -p:Platform=x64
+  & $dotnet build -c $DotNetConfig -p:Platform=x64
+  if ($LASTEXITCODE -ne 0) { throw "WinUI build failed" }
+
+  $exe = Get-ChildItem -Recurse -Path (Join-Path $winui "bin") -Filter "AsignacionDelCielo.WinUI.exe" |
+    Where-Object { $_.FullName -match [regex]::Escape($DotNetConfig) } |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+  if (-not $exe) { throw "WinUI exe not found under bin\" }
+
+  Write-Host "==> Launching $($exe.FullName)" -ForegroundColor Cyan
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $exe.FullName
+  $psi.WorkingDirectory = $exe.DirectoryName
+  $psi.UseShellExecute = $false
+  $psi.EnvironmentVariables["ADC_API_EXE"] = $apiExe
+  $psi.EnvironmentVariables["ADC_UI_DIR"] = $env:ADC_UI_DIR
+  $psi.EnvironmentVariables["ADC_API_PORT"] = "17865"
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  Write-Host "==> WinUI started (PID $($proc.Id)). Close the window when done." -ForegroundColor Green
+  # Don't wait forever if launched interactively from an agent; wait if console attached
+  if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+    $proc.WaitForExit()
   }
 } finally {
   Pop-Location

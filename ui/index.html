@@ -141,24 +141,25 @@
     /* WinUI 3 / Acrylic: translucent panels so system backdrop shows through */
     [data-theme="fluent-glass"] {
       --bg: transparent;
-      --panel: rgba(20, 24, 32, 0.42);
-      --panel-2: rgba(28, 32, 42, 0.38);
-      --border: rgba(255, 255, 255, 0.12);
-      --text: #f3f6fb;
-      --muted: rgba(226, 232, 240, 0.72);
+      --panel: rgba(16, 20, 30, 0.52);
+      --panel-2: rgba(24, 28, 40, 0.45);
+      --border: rgba(255, 255, 255, 0.14);
+      --text: #f5f8fc;
+      --muted: rgba(226, 232, 240, 0.78);
       --accent: #7dd3fc;
-      --accent-soft: rgba(125, 211, 252, 0.16);
+      --accent-soft: rgba(125, 211, 252, 0.18);
       --sky: #bae6fd;
       --ok: #4ade80;
       --jesus: #f87171;
-      --hl-bg: rgba(125, 211, 252, 0.22);
+      --hl-bg: rgba(125, 211, 252, 0.24);
       --hl-fg: #e0f2fe;
-      --hover-row: rgba(255, 255, 255, 0.06);
-      --input-bg: rgba(8, 12, 20, 0.35);
-      --header-grad: linear-gradient(90deg, rgba(15,18,28,.45), rgba(30,40,60,.35), rgba(15,18,28,.45));
-      --tabs-bg: rgba(12, 16, 24, 0.32);
-      --shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+      --hover-row: rgba(255, 255, 255, 0.07);
+      --input-bg: rgba(8, 12, 20, 0.42);
+      --header-grad: linear-gradient(90deg, rgba(12,16,26,.55), rgba(28,38,58,.42), rgba(12,16,26,.55));
+      --tabs-bg: rgba(10, 14, 22, 0.40);
+      --shadow: 0 14px 44px rgba(0, 0, 0, 0.32);
       --card-radius: 16px;
+      --glass-blur: blur(24px) saturate(1.4);
       --mark-gold-bg: rgba(251,191,36,.28);   --mark-gold-fg: #fef3c7;  --mark-gold-bd: rgba(251,191,36,.5);
       --mark-sky-bg: rgba(56,189,248,.24);    --mark-sky-fg: #e0f2fe;   --mark-sky-bd: rgba(56,189,248,.45);
       --mark-rose-bg: rgba(251,113,133,.24);  --mark-rose-fg: #ffe4e6;  --mark-rose-bd: rgba(251,113,133,.45);
@@ -166,22 +167,55 @@
       --mark-violet-bg: rgba(167,139,250,.26);--mark-violet-fg: #ede9fe;--mark-violet-bd: rgba(167,139,250,.5);
       --mark-peach-bg: rgba(251,146,60,.24);  --mark-peach-fg: #ffedd5; --mark-peach-bd: rgba(251,146,60,.45);
     }
-    [data-theme="fluent-glass"] html,
+    /* data-theme lives on <html> */
     html[data-theme="fluent-glass"],
-    [data-theme="fluent-glass"] body {
+    html[data-theme="fluent-glass"] body,
+    html[data-theme="fluent-glass"] #app {
       background: transparent !important;
     }
-    [data-theme="fluent-glass"] header.app-header,
-    [data-theme="fluent-glass"] .tabs,
-    [data-theme="fluent-glass"] .panel,
-    [data-theme="fluent-glass"] .card,
-    [data-theme="fluent-glass"] .side,
-    [data-theme="fluent-glass"] .verse-list,
-    [data-theme="fluent-glass"] .modal,
-    [data-theme="fluent-glass"] .drawer {
-      backdrop-filter: blur(22px) saturate(1.35);
-      -webkit-backdrop-filter: blur(22px) saturate(1.35);
+    html[data-theme="fluent-glass"] header.app-header,
+    html[data-theme="fluent-glass"] nav.tabs,
+    html[data-theme="fluent-glass"] .modbar,
+    html[data-theme="fluent-glass"] .card,
+    html[data-theme="fluent-glass"] .modal,
+    html[data-theme="fluent-glass"] .ctx-menu,
+    html[data-theme="fluent-glass"] .pill-dd-menu,
+    html[data-theme="fluent-glass"] .study-side-item {
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
     }
+    html[data-theme="fluent-glass"] .card {
+      border-color: rgba(255, 255, 255, 0.16);
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
+    html[data-theme="fluent-glass"] nav.tabs button.active {
+      background: rgba(125, 211, 252, 0.14);
+      border-color: rgba(125, 211, 252, 0.28);
+    }
+    html[data-theme="fluent-glass"] select,
+    html[data-theme="fluent-glass"] input,
+    html[data-theme="fluent-glass"] button,
+    html[data-theme="fluent-glass"] textarea {
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+    html[data-theme="fluent-glass"] .verse:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    /* Subtle host chip when running under WinUI */
+    .host-chip {
+      display: none;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--accent);
+      border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+      background: var(--accent-soft);
+      border-radius: 999px;
+      padding: 3px 9px;
+      white-space: nowrap;
+    }
+    .host-chip.show { display: inline-flex; align-items: center; gap: 4px; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0; height: 100%;
@@ -1234,6 +1268,7 @@
             <h1>Asignación del Cielo</h1>
             <p id="mod-count">e-Sword local</p>
           </div>
+          <span class="host-chip" id="host-chip" title="Corriendo en WinUI 3">Fluent</span>
         </div>
         <div class="controls">
           <div class="pill-dd" id="pill-book">
@@ -5506,6 +5541,14 @@
     if (early === "liquid-glass") early = earlyDefault;
     document.documentElement.setAttribute("data-theme", early);
     document.documentElement.removeAttribute("data-glass");
+  } catch (e) {}
+
+  // Show host chip only under WinUI
+  try {
+    if (window.__ADC_HOST__ === "winui3") {
+      var chip = document.getElementById("host-chip");
+      if (chip) chip.classList.add("show");
+    }
   } catch (e) {}
 
   if (document.readyState === "loading") {

@@ -15,25 +15,30 @@
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch" />
 
-        <!-- Boot overlay until WebView + API are ready -->
+        <!-- Soft glass boot overlay until WebView + API are ready -->
         <Border
             x:Name="BootOverlay"
-            Background="{ThemeResource LayerOnMicaBaseAltFillColorDefaultBrush}"
-            Opacity="0.92">
+            Background="#99101828">
             <StackPanel
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
-                Spacing="12">
+                Spacing="14">
                 <ProgressRing
-                    Width="40"
-                    Height="40"
+                    Width="42"
+                    Height="42"
                     IsActive="True" />
                 <TextBlock
                     x:Name="BootStatus"
                     HorizontalAlignment="Center"
-                    FontSize="14"
-                    Opacity="0.85"
+                    FontSize="15"
+                    FontWeight="SemiBold"
+                    Opacity="0.92"
                     Text="Iniciando Asignación del Cielo…" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    FontSize="12"
+                    Opacity="0.65"
+                    Text="WinUI 3 · e-Sword local" />
             </StackPanel>
         </Border>
     </Grid>
