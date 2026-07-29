@@ -3,15 +3,21 @@
 //!
 //!   POST /invoke  { "cmd": "list_bible_books", "args": {} }
 //!   GET  /health
+//!
+//! Concurrent requests are handled on a thread pool so switching Bibles
+//! (chapter load + parallel probes) does not block the whole API.
 
 use asignacion_del_cielo_bible_lib::api_dispatch;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 const DEFAULT_PORT: u16 = 17865;
+const MAX_WORKERS: usize = 8;
 
 #[derive(Deserialize)]
 struct InvokeBody {
@@ -21,6 +27,13 @@ struct InvokeBody {
 }
 
 fn main() {
+    // Catch panics inside workers so one bad module can't kill the sidecar.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        eprintln!("adc-api panic (contained): {info}");
+        default_hook(info);
+    }));
+
     let port: u16 = std::env::var("ADC_API_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -31,16 +44,40 @@ fn main() {
         eprintln!("adc-api: failed to bind {addr}: {e}");
         std::process::exit(1);
     });
-    // Allow concurrent short requests without hanging accept forever.
-    let _ = listener.set_nonblocking(false);
-    eprintln!("adc-api listening on http://{addr}");
+    eprintln!("adc-api listening on http://{addr} (threaded)");
+
+    // Simple semaphore: cap concurrent handlers so we don't open 100 sqlite files at once.
+    let slots = Arc::new(Mutex::new(0usize));
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(e) = handle_client(stream) {
-                    eprintln!("adc-api request error: {e}");
-                }
+                let slots = Arc::clone(&slots);
+                thread::spawn(move || {
+                    // Wait for a free slot
+                    loop {
+                        {
+                            let mut n = slots.lock().unwrap_or_else(|e| e.into_inner());
+                            if *n < MAX_WORKERS {
+                                *n += 1;
+                                break;
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        handle_client(stream)
+                    }));
+                    {
+                        let mut n = slots.lock().unwrap_or_else(|e| e.into_inner());
+                        *n = n.saturating_sub(1);
+                    }
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => eprintln!("adc-api request error: {e}"),
+                        Err(_) => eprintln!("adc-api: request handler panicked"),
+                    }
+                });
             }
             Err(e) => eprintln!("adc-api accept error: {e}"),
         }
@@ -48,30 +85,29 @@ fn main() {
 }
 
 fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(60)));
 
     let mut buf = vec![0u8; 65536];
     let mut request = Vec::new();
     loop {
-        let n = stream.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
+        let n = match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                break;
+            }
+            Err(e) => return Err(e),
+        };
         request.extend_from_slice(&buf[..n]);
-        if request.windows(4).any(|w| w == b"\r\n\r\n") {
-            // If Content-Length present, keep reading until body is complete.
+        if let Some(header_end) = find_header_end(&request) {
             if let Some(cl) = content_length(&request) {
-                if let Some(header_end) = find_header_end(&request) {
-                    let body_len = request.len() - header_end;
-                    if body_len >= cl {
-                        break;
-                    }
-                    // grow and continue
-                    if request.capacity() < header_end + cl {
-                        request.reserve(header_end + cl - request.len());
-                    }
-                    continue;
+                let body_len = request.len() - header_end;
+                if body_len >= cl {
+                    break;
                 }
             } else {
                 break;
@@ -96,13 +132,17 @@ fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
     let method = parts.next().unwrap_or("");
     let path = parts.next().unwrap_or("/");
 
-    // CORS preflight for https://app.local WebView mapping
     if method == "OPTIONS" {
         return write_cors_empty(&mut stream);
     }
 
     if method == "GET" && (path == "/health" || path.starts_with("/health?")) {
-        let body = json!({ "ok": true, "service": "adc-api", "version": env!("CARGO_PKG_VERSION") });
+        let body = json!({
+            "ok": true,
+            "service": "adc-api",
+            "version": env!("CARGO_PKG_VERSION"),
+            "threaded": true
+        });
         return write_json(&mut stream, 200, &body);
     }
 
@@ -115,7 +155,16 @@ fn handle_client(mut stream: TcpStream) -> std::io::Result<()> {
                 return write_json(&mut stream, 400, &body);
             }
         };
-        let envelope = api_dispatch::dispatch_envelope(&invoke.cmd, &invoke.args);
+        // Contain panics inside dispatch (e.g. unexpected sqlite/module issues)
+        let envelope = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            api_dispatch::dispatch_envelope(&invoke.cmd, &invoke.args)
+        })) {
+            Ok(v) => v,
+            Err(_) => json!({
+                "ok": false,
+                "error": format!("internal panic while handling '{}'", invoke.cmd)
+            }),
+        };
         return write_json(&mut stream, 200, &envelope);
     }
 

@@ -173,14 +173,15 @@
     html[data-theme="fluent-glass"] #app {
       background: transparent !important;
     }
+    /* Blur only large chrome surfaces — NOT every button (that crashes WebView2
+       when the Bible list / verse tokens rebuild with 50+ modules). */
     html[data-theme="fluent-glass"] header.app-header,
     html[data-theme="fluent-glass"] nav.tabs,
     html[data-theme="fluent-glass"] .modbar,
     html[data-theme="fluent-glass"] .card,
     html[data-theme="fluent-glass"] .modal,
     html[data-theme="fluent-glass"] .ctx-menu,
-    html[data-theme="fluent-glass"] .pill-dd-menu,
-    html[data-theme="fluent-glass"] .study-side-item {
+    html[data-theme="fluent-glass"] .pill-dd-panel {
       backdrop-filter: var(--glass-blur);
       -webkit-backdrop-filter: var(--glass-blur);
     }
@@ -192,15 +193,11 @@
       background: rgba(125, 211, 252, 0.14);
       border-color: rgba(125, 211, 252, 0.28);
     }
-    html[data-theme="fluent-glass"] select,
-    html[data-theme="fluent-glass"] input,
-    html[data-theme="fluent-glass"] button,
-    html[data-theme="fluent-glass"] textarea {
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-    }
     html[data-theme="fluent-glass"] .verse:hover {
       background: rgba(255, 255, 255, 0.08);
+    }
+    html[data-theme="fluent-glass"] .pill-dd-panel {
+      background: rgba(16, 20, 30, 0.82);
     }
     /* Subtle host chip when running under WinUI */
     .host-chip {
@@ -1594,8 +1591,24 @@
         "No hay API (Tauri o WinUI/adc-api). Abrí la ventana de escritorio de la app."
       ));
     }
-    return inv(cmd, args || {});
+    try {
+      return Promise.resolve(inv(cmd, args || {})).catch(function (e) {
+        var msg = e && e.message ? e.message : String(e);
+        // Friendlier offline / API-down errors
+        if (/Failed to fetch|NetworkError|fetch/i.test(msg)) {
+          return Promise.reject(new Error(
+            "No se pudo contactar el API (adc-api). ¿Se cerró el proceso?"
+          ));
+        }
+        return Promise.reject(e instanceof Error ? e : new Error(msg));
+      });
+    } catch (e) {
+      return Promise.reject(e instanceof Error ? e : new Error(String(e)));
+    }
   }
+
+  /** Monotonic token so stale chapter loads don't clobber a newer Bible selection. */
+  var _chapterLoadGen = 0;
 
   var state = {
     modules: [],
@@ -3835,6 +3848,7 @@
   function fillChapterSelect() {
     var max = bookMeta().chapters || 1;
     var sel = el("sel-chapter");
+    if (!sel) return;
     sel.innerHTML = "";
     for (var c = 1; c <= max; c++) {
       var o = document.createElement("option");
@@ -3862,6 +3876,12 @@
     var wasOpen = root.classList.contains("open");
     closeAllPillDropdowns();
     if (wasOpen) return;
+    // Rebuild list when opening so active mark is correct after a silent switch
+    if (id === "pill-bible") {
+      try { fillBiblePill(); } catch (e) { console.warn(e); }
+    } else if (id === "pill-book") {
+      try { fillBookPill(); } catch (e) { console.warn(e); }
+    }
     root.classList.add("open");
     var btn = root.querySelector(".pill-dd-btn");
     var panel = root.querySelector(".pill-dd-panel");
@@ -3933,6 +3953,8 @@
     panel.innerHTML = "";
     var list = state.bibles || [];
     var curPath = state.bible && state.bible.path;
+    // DocumentFragment: one DOM insert instead of 50+ reflows (smoother under glass)
+    var frag = document.createDocumentFragment();
     for (var i = 0; i < list.length; i++) {
       (function (b) {
         var item = document.createElement("button");
@@ -3941,8 +3963,9 @@
         item.setAttribute("role", "option");
         var abbr = b.abbreviation || b.filename || "Biblia";
         var full = (b.title || "").trim();
-        item.innerHTML = "<span></span>";
-        item.querySelector("span").textContent = abbr;
+        var main = document.createElement("span");
+        main.textContent = abbr;
+        item.appendChild(main);
         if (full && full.toLowerCase() !== String(abbr).toLowerCase()) {
           var sub = document.createElement("span");
           sub.className = "pdd-sub";
@@ -3951,20 +3974,31 @@
         }
         item.title = bibleFullName(b) || abbr;
         item.onclick = function () {
-          closeAllPillDropdowns();
-          if (state.bible && state.bible.path === b.path) return;
-          state.bible = b;
-          syncBiblePill();
-          fillBiblePill();
-          if (state.parallelPaths[0] === b.path) state.parallelPaths[0] = "";
-          if (state.parallelPaths[1] === b.path) state.parallelPaths[1] = "";
-          saveParallelPrefs();
-          fillParallelSelects();
-          loadChapter();
+          try {
+            closeAllPillDropdowns();
+            if (state.bible && state.bible.path === b.path) return;
+            state.bible = b;
+            syncBiblePill();
+            // Don't rebuild the whole 50+ item list mid-click (can freeze WebView2);
+            // refresh active mark the next time the menu opens via togglePillDropdown.
+            if (state.parallelPaths[0] === b.path) state.parallelPaths[0] = "";
+            if (state.parallelPaths[1] === b.path) state.parallelPaths[1] = "";
+            saveParallelPrefs();
+            try { fillParallelSelects(); } catch (pe) { console.warn(pe); }
+            loadChapter();
+          } catch (err) {
+            console.error("bible switch failed", err);
+            var errBox = el("chapter-error");
+            if (errBox) {
+              errBox.style.display = "block";
+              errBox.textContent = "Error al cambiar Biblia: " + (err.message || err);
+            }
+          }
         };
-        panel.appendChild(item);
+        frag.appendChild(item);
       })(list[i]);
     }
+    panel.appendChild(frag);
     syncBiblePill();
   }
 
@@ -4615,14 +4649,33 @@
 
   function loadChapter() {
     if (!state.bible) return;
-    fillChapterSelect();
-    el("chapter-status").textContent = "Cargando " + bookMeta().name + " " + state.chapter + "…";
-    el("chapter-error").style.display = "none";
+    var gen = ++_chapterLoadGen;
+    var biblePath = state.bible.path;
+    var bookNumber = state.bookNumber;
+    var chapter = state.chapter;
 
-    var cacheKey = state.bible.path + "|" + state.bookNumber + "|" + state.chapter;
+    try { fillChapterSelect(); } catch (e) { console.warn(e); }
+
+    var statusEl = el("chapter-status");
+    var errEl = el("chapter-error");
+    if (statusEl) {
+      statusEl.textContent = "Cargando " + bookMeta().name + " " + chapter + "…";
+    }
+    if (errEl) errEl.style.display = "none";
+
+    var cacheKey = biblePath + "|" + bookNumber + "|" + chapter;
     var cached = getChapterCache(cacheKey);
 
+    function stillCurrent() {
+      return gen === _chapterLoadGen &&
+        state.bible &&
+        state.bible.path === biblePath &&
+        state.bookNumber === bookNumber &&
+        state.chapter === chapter;
+    }
+
     function applyChapterResult(res) {
+      if (!stillCurrent()) return;
       state.verses = res.verses || [];
       putChapterCache(cacheKey, {
         verses: state.verses,
@@ -4643,23 +4696,35 @@
       }
 
       var finish = function () {
+        if (!stillCurrent()) return;
         var status =
           (res.moduleTitle || res.translation || "") + " · " + state.verses.length + " versículos";
         if (state.bibleView === "parallel") {
           var extra = activeParallelPaths().length;
           if (extra) status += " · paralela +" + extra;
         }
-        el("chapter-status").textContent = status;
-        renderVerses(el("search-verse").value);
-        updateNoteUI();
-        updateSelectionUI();
-        updateHlBarUI();
-        updateFooter();
-        saveNavPosition();
+        if (statusEl) statusEl.textContent = status;
+        try {
+          renderVerses(el("search-verse") ? el("search-verse").value : "");
+          updateNoteUI();
+          updateSelectionUI();
+          updateHlBarUI();
+          updateFooter();
+          saveNavPosition();
+        } catch (renderErr) {
+          console.error("render after chapter load failed", renderErr);
+          if (errEl) {
+            errEl.style.display = "block";
+            errEl.textContent = "Error al mostrar capítulo: " + (renderErr.message || renderErr);
+          }
+        }
       };
 
       if (state.bibleView === "parallel") {
-        return loadParallelChapters().then(finish);
+        return loadParallelChapters().then(finish).catch(function (pe) {
+          console.warn(pe);
+          finish();
+        });
       }
       state.parallelByPath = {};
       finish();
@@ -4676,18 +4741,20 @@
     }
 
     invoke("get_bible_chapter", {
-      modulePath: state.bible.path,
-      bookNumber: state.bookNumber,
-      chapter: state.chapter
+      modulePath: biblePath,
+      bookNumber: bookNumber,
+      chapter: chapter
     }).then(function (res) {
       applyChapterResult(res);
     }).catch(function (e) {
+      if (!stillCurrent()) return;
       state.verses = [];
-      renderVerses("");
-      updateHlBarUI();
-      el("chapter-error").style.display = "block";
-      el("chapter-error").textContent = String(e.message || e);
-      el("chapter-status").textContent = "Error al cargar capítulo";
+      try { renderVerses(""); updateHlBarUI(); } catch (re) { console.warn(re); }
+      if (errEl) {
+        errEl.style.display = "block";
+        errEl.textContent = String(e.message || e);
+      }
+      if (statusEl) statusEl.textContent = "Error al cargar capítulo";
     });
   }
 
