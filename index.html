@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asignación del Cielo Bible</title>
+    <style>
+      html, body, #root {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        background: #020617;
+        color: #f1f5f9;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      #boot {
+        padding: 24px;
+        font-size: 15px;
+        color: #94a3b8;
+        line-height: 1.5;
+      }
+      #boot strong { color: #fbbf24; }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="boot">
+        <strong>Asignación del Cielo Bible</strong><br />
+        <span id="boot-msg">Iniciando…</span>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var el = document.getElementById("boot-msg");
+        if (el) el.textContent = "WebView OK · cargando app…";
+        window.__adcSetBoot = function (msg) {
+          var m = document.getElementById("boot-msg");
+          if (m) m.textContent = msg;
+        };
+        window.addEventListener("error", function (ev) {
+          var m = document.getElementById("boot-msg");
+          if (m) {
+            m.style.color = "#f87171";
+            m.textContent =
+              "Error JS: " +
+              (ev.message || "desconocido") +
+              (ev.filename ? " @ " + ev.filename : "");
+          }
+        });
+        window.addEventListener("unhandledrejection", function (ev) {
+          var m = document.getElementById("boot-msg");
+          if (m) {
+            m.style.color = "#f87171";
+            m.textContent = "Promise error: " + String(ev.reason);
+          }
+        });
+      })();
+    </script>
+    <!-- Vite dev: module. Production (fix-html): classic IIFE. -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
