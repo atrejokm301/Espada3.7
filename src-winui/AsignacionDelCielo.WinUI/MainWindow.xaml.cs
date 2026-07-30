@@ -11,8 +11,8 @@ public sealed partial class MainWindow : Window
     {
         InitializeComponent();
 
-        ExtendsContentIntoTitleBar = true;
-        SetTitleBar(AppTitleBar);
+        // Standard OS title bar only — custom chrome was part of the crash surface.
+        ExtendsContentIntoTitleBar = false;
 
         try
         {
@@ -23,9 +23,7 @@ public sealed partial class MainWindow : Window
             CrashLog.Write("SetIcon failed", ex);
         }
 
-        var size = new SizeInt32(1280, 800);
-        AppWindow.Resize(size);
-
+        AppWindow.Resize(new SizeInt32(1280, 800));
         if (AppWindow.Presenter is OverlappedPresenter presenter)
         {
             presenter.IsResizable = true;

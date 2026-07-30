@@ -50,6 +50,27 @@ public sealed class ApiHost : IDisposable
         };
         psi.Environment["ADC_API_PORT"] = Port.ToString();
 
+        // Serve study UI from the same origin as /invoke (needed for stable + WinUI http loads).
+        var uiDir = Environment.GetEnvironmentVariable("ADC_UI_DIR");
+        if (string.IsNullOrWhiteSpace(uiDir))
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            for (var i = 0; i < 10 && dir is not null; i++)
+            {
+                var candidate = Path.Combine(dir.FullName, "ui");
+                if (File.Exists(Path.Combine(candidate, "index.html")))
+                {
+                    uiDir = candidate;
+                    break;
+                }
+                dir = dir.Parent;
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(uiDir))
+        {
+            psi.Environment["ADC_UI_DIR"] = uiDir;
+        }
+
         _process = Process.Start(psi)
             ?? throw new InvalidOperationException($"No se pudo iniciar {exe}");
         _ownedProcess = true;

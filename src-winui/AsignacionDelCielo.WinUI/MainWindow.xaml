@@ -1,33 +1,13 @@
 <?xml version="1.0" encoding="utf-8" ?>
+<!-- Ultra-minimal host: no custom title bar, no system backdrop (stability). -->
 <Window
     x:Class="AsignacionDelCielo_WinUI.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     Title="Asignación del Cielo Bible"
-    mc:Ignorable="d">
-
-    <!-- Mica is more stable than DesktopAcrylic + transparent WebView2 -->
-    <Window.SystemBackdrop>
-        <MicaBackdrop Kind="Base" />
-    </Window.SystemBackdrop>
+    >
 
     <Grid Background="#FF0B0F16">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-
-        <TitleBar
-            x:Name="AppTitleBar"
-            Title="Asignación del Cielo Bible"
-            Subtitle="Fluent · offline">
-            <TitleBar.IconSource>
-                <ImageIconSource ImageSource="Assets/AppIcon.ico" />
-            </TitleBar.IconSource>
-        </TitleBar>
-
-        <Frame x:Name="RootFrame" Grid.Row="1" Background="#FF0B0F16" />
+        <Frame x:Name="RootFrame" Background="#FF0B0F16" />
     </Grid>
 </Window>

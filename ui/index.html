@@ -2064,7 +2064,10 @@
   }
 
   function defaultThemeId() {
-    return window.__ADC_HOST__ === "winui3" ? "fluent-glass" : "true-dark";
+    // Desktop hosts (WinUI / Edge app) get Fluent Glass; pure browser stays True Dark.
+    return (window.__ADC_HOST__ === "winui3" || window.__ADC_HOST__ === "edge-app")
+      ? "fluent-glass"
+      : "true-dark";
   }
 
   function loadSavedTheme() {
@@ -5606,7 +5609,9 @@
 
   // Apply theme ASAP (even on boot screen)
   try {
-    var earlyDefault = window.__ADC_HOST__ === "winui3" ? "fluent-glass" : "true-dark";
+    var earlyDefault = (window.__ADC_HOST__ === "winui3" || window.__ADC_HOST__ === "edge-app")
+      ? "fluent-glass"
+      : "true-dark";
     var early = localStorage.getItem(THEME_KEY) || earlyDefault;
     // Removed themes fall back to default for this host
     if (early === "liquid-glass") early = earlyDefault;
@@ -5614,11 +5619,17 @@
     document.documentElement.removeAttribute("data-glass");
   } catch (e) {}
 
-  // Show host chip only under WinUI
+  // Show host chip on desktop shells
   try {
-    if (window.__ADC_HOST__ === "winui3") {
+    if (window.__ADC_HOST__ === "winui3" || window.__ADC_HOST__ === "edge-app") {
       var chip = document.getElementById("host-chip");
-      if (chip) chip.classList.add("show");
+      if (chip) {
+        chip.classList.add("show");
+        chip.textContent = window.__ADC_HOST__ === "edge-app" ? "Stable" : "Fluent";
+        chip.title = window.__ADC_HOST__ === "edge-app"
+          ? "Shell estable (Edge app + adc-api)"
+          : "Corriendo en WinUI 3";
+      }
     }
   } catch (e) {}
 
