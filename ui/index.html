@@ -1257,8 +1257,72 @@
     <div>
       <strong>Asignación del Cielo Bible</strong>
       <div id="boot-msg">Iniciando…</div>
+      <div id="boot-hint" style="margin-top:12px;font-size:12px;max-width:28rem;line-height:1.45;opacity:.85"></div>
     </div>
   </div>
+  <!-- Tiny early boot: always runs even if the big script fails -->
+  <script>
+  (function () {
+    var msg = document.getElementById("boot-msg");
+    var hint = document.getElementById("boot-hint");
+    function set(t, err) {
+      if (msg) {
+        msg.textContent = t;
+        msg.style.color = err ? "#f87171" : "";
+      }
+    }
+    function setHint(t) { if (hint) hint.textContent = t || ""; }
+    set("Comprobando JavaScript…");
+    window.onerror = function (m, src, line) {
+      set("Error JS: " + m + " (línea " + line + ")", true);
+      setHint(src || "");
+    };
+    window.addEventListener("unhandledrejection", function (ev) {
+      var r = ev && ev.reason;
+      set("Error: " + (r && r.message ? r.message : String(r || "promise")), true);
+    });
+    // If we are on adc-api, health must answer. If not, tell the user clearly.
+    var base = "";
+    try {
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        base = location.origin;
+      }
+    } catch (e) {}
+    if (!base) {
+      set("Abrí la app con Start-ADC-Stable.bat (no abras el HTML directo).", true);
+      setHint("El archivo solo no tiene el backend e-Sword.");
+      return;
+    }
+    set("Contactando servidor…");
+    var n = 0;
+    function ping() {
+      n++;
+      fetch(base + "/health", { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (j) {
+          if (!j || !j.ok) throw new Error("health inválido");
+          set("Servidor OK — cargando módulos…");
+          setHint(base + " · ui=" + (j.ui ? "sí" : "no"));
+          window.__ADC_API_BASE__ = window.__ADC_API_BASE__ || base;
+          window.__ADC_HOST__ = window.__ADC_HOST__ || "edge-app";
+        })
+        .catch(function () {
+          if (n < 30) {
+            set("Esperando adc-api… (" + n + "/30)");
+            setHint("Si no arranca: doble clic en Start-ADC-Stable.bat");
+            setTimeout(ping, 500);
+          } else {
+            set("No hay servidor en " + base, true);
+            setHint("Ejecutá Start-ADC-Stable.bat y recargá (Ctrl+R).");
+          }
+        });
+    }
+    ping();
+  })();
+  </script>
 
   <div id="app" style="display:none">
     <div class="app-chrome" id="app-chrome">
