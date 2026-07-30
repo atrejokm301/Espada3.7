@@ -1260,28 +1260,38 @@
       <div id="boot-hint" style="margin-top:12px;font-size:12px;max-width:28rem;line-height:1.45;opacity:.85"></div>
     </div>
   </div>
-  <!-- Tiny early boot: always runs even if the big script fails -->
+  <!-- Tiny early boot: health check + handoff to main app (never steal status after main starts) -->
   <script>
   (function () {
     var msg = document.getElementById("boot-msg");
     var hint = document.getElementById("boot-hint");
     function set(t, err) {
+      if (window.__ADC_BOOT_STARTED__) return; // main app owns the label now
       if (msg) {
         msg.textContent = t;
         msg.style.color = err ? "#f87171" : "";
       }
     }
-    function setHint(t) { if (hint) hint.textContent = t || ""; }
+    function setHint(t) {
+      if (window.__ADC_BOOT_STARTED__) return;
+      if (hint) hint.textContent = t || "";
+    }
+    function setForce(t, err) {
+      if (msg) {
+        msg.textContent = t;
+        msg.style.color = err ? "#f87171" : "";
+      }
+      if (hint && err) hint.textContent = hint.textContent || "";
+    }
     set("Comprobando JavaScript…");
     window.onerror = function (m, src, line) {
-      set("Error JS: " + m + " (línea " + line + ")", true);
-      setHint(src || "");
+      setForce("Error JS: " + m + " (línea " + line + ")", true);
+      if (hint) hint.textContent = src || "";
     };
     window.addEventListener("unhandledrejection", function (ev) {
       var r = ev && ev.reason;
-      set("Error: " + (r && r.message ? r.message : String(r || "promise")), true);
+      setForce("Error: " + (r && r.message ? r.message : String(r || "promise")), true);
     });
-    // If we are on adc-api, health must answer. If not, tell the user clearly.
     var base = "";
     try {
       if (location.protocol === "http:" || location.protocol === "https:") {
@@ -1293,6 +1303,22 @@
       setHint("El archivo solo no tiene el backend e-Sword.");
       return;
     }
+    window.__ADC_API_BASE__ = window.__ADC_API_BASE__ || base;
+    window.__ADC_HOST__ = window.__ADC_HOST__ || "edge-app";
+
+    function kickMain() {
+      if (window.__ADC_APP_SHOWN__) return;
+      if (typeof window.__ADC_RUN_BOOT__ === "function") {
+        try {
+          window.__ADC_RUN_BOOT__();
+        } catch (e) {
+          setForce("Error al arrancar: " + (e.message || e), true);
+        }
+        return true;
+      }
+      return false;
+    }
+
     set("Contactando servidor…");
     var n = 0;
     function ping() {
@@ -1304,18 +1330,34 @@
         })
         .then(function (j) {
           if (!j || !j.ok) throw new Error("health inválido");
-          set("Servidor OK — cargando módulos…");
+          set("Servidor OK — arrancando app…");
           setHint(base + " · ui=" + (j.ui ? "sí" : "no"));
-          window.__ADC_API_BASE__ = window.__ADC_API_BASE__ || base;
-          window.__ADC_HOST__ = window.__ADC_HOST__ || "edge-app";
+          // Main script may still be parsing; keep trying to hand off.
+          var tries = 0;
+          (function waitMain() {
+            tries++;
+            if (kickMain()) return;
+            if (tries < 200) {
+              if (tries === 10 || tries === 40 || tries === 100) {
+                set("Servidor OK — esperando script principal… (" + tries + ")");
+              }
+              setTimeout(waitMain, 50);
+            } else if (!window.__ADC_APP_SHOWN__) {
+              setForce(
+                "El script principal no arrancó. Recargá con Ctrl+Shift+R",
+                true
+              );
+              setHint("Si sigue fallando, abrí la consola (F12) y copiá el error.");
+            }
+          })();
         })
         .catch(function () {
-          if (n < 30) {
-            set("Esperando adc-api… (" + n + "/30)");
-            setHint("Si no arranca: doble clic en Start-ADC-Stable.bat");
-            setTimeout(ping, 500);
+          if (n < 40) {
+            set("Esperando adc-api… (" + n + "/40)");
+            setHint("Doble clic en Start-ADC-Stable.bat si no arranca solo");
+            setTimeout(ping, 400);
           } else {
-            set("No hay servidor en " + base, true);
+            setForce("No hay servidor en " + base, true);
             setHint("Ejecutá Start-ADC-Stable.bat y recargá (Ctrl+R).");
           }
         });
@@ -1612,10 +1654,16 @@
   "use strict";
 
   var bootMsg = document.getElementById("boot-msg");
+  var bootHint = document.getElementById("boot-hint");
   function setBoot(t, err) {
+    window.__ADC_BOOT_STARTED__ = true;
+    if (!bootMsg) bootMsg = document.getElementById("boot-msg");
     if (!bootMsg) return;
     bootMsg.textContent = t;
-    if (err) bootMsg.style.color = "#f87171";
+    bootMsg.style.color = err ? "#f87171" : "";
+    if (err && bootHint && !bootHint.textContent) {
+      bootHint.textContent = "Si el servidor murió: Start-ADC-Stable.bat";
+    }
   }
 
   /** Resolve HTTP API base for adc-api (WinUI inject, Edge app, or same-origin). */
@@ -3386,8 +3434,12 @@
   function el(id) { return document.getElementById(id); }
 
   function showApp() {
-    el("boot").style.display = "none";
-    el("app").style.display = "flex";
+    window.__ADC_APP_SHOWN__ = true;
+    window.__ADC_BOOT_STARTED__ = true;
+    var bootEl = el("boot");
+    var appEl = el("app");
+    if (bootEl) bootEl.style.display = "none";
+    if (appEl) appEl.style.display = "flex";
   }
 
   /**
@@ -5578,6 +5630,8 @@
   }
 
   function boot() {
+    if (window.__ADC_APP_SHOWN__ || window.__ADC_START_RUNNING__) return;
+    window.__ADC_BOOT_STARTED__ = true;
     var host = window.__ADC_HOST__ || "";
     var hostHint =
       host === "winui3" ? "Conectando con WinUI 3 + adc-api…" :
@@ -5590,11 +5644,12 @@
     var maxTries = 40; // ~10s
 
     function attempt() {
+      if (window.__ADC_APP_SHOWN__ || window.__ADC_START_RUNNING__) return;
       tries++;
       if (!getInvoke()) {
         if (tries >= maxTries) {
           setBoot(
-            "Sin API. En PowerShell:  .\\scripts\\run-stable.ps1",
+            "Sin API. Ejecutá Start-ADC-Stable.bat",
             true
           );
           return;
@@ -5603,13 +5658,13 @@
         setTimeout(attempt, 250);
         return;
       }
-      // Invoke exists — make sure /health answers before scanning modules
       pingApi().then(function (ok) {
+        if (window.__ADC_APP_SHOWN__ || window.__ADC_START_RUNNING__) return;
         if (!ok) {
           if (tries >= maxTries) {
             setBoot(
               "adc-api no responde en " + (getApiBase() || "127.0.0.1:17865") +
-              ". Ejecutá .\\scripts\\run-stable.ps1",
+              ". Ejecutá Start-ADC-Stable.bat",
               true
             );
             return;
@@ -5624,7 +5679,12 @@
     attempt();
   }
 
+  // Hand-off for early boot script
+  window.__ADC_RUN_BOOT__ = boot;
+
   function start() {
+    if (window.__ADC_START_RUNNING__) return;
+    window.__ADC_START_RUNNING__ = true;
     setBoot("Escaneando e-Sword…");
     var scanTimeout = new Promise(function (_, reject) {
       setTimeout(function () {
@@ -5640,109 +5700,116 @@
       ]),
       scanTimeout
     ]).then(function (pair) {
-      state.modules = pair[0] || [];
-      state.books = pair[1] || [];
-      state.bibles = state.modules.filter(function (m) { return m.moduleType === "bible"; });
-      state.commentaries = state.modules.filter(function (m) { return m.moduleType === "commentary"; });
-      state.dictionaries = state.modules.filter(function (m) { return m.moduleType === "dictionary"; });
-      state.lexicons = state.modules.filter(function (m) { return m.moduleType === "lexicon"; });
+      try {
+        setBoot("Preparando interfaz… (" + ((pair[0] || []).length) + " módulos)");
+        state.modules = pair[0] || [];
+        state.books = pair[1] || [];
+        state.bibles = state.modules.filter(function (m) { return m.moduleType === "bible"; });
+        state.commentaries = state.modules.filter(function (m) { return m.moduleType === "commentary"; });
+        state.dictionaries = state.modules.filter(function (m) { return m.moduleType === "dictionary"; });
+        state.lexicons = state.modules.filter(function (m) { return m.moduleType === "lexicon"; });
 
-      state.bible = pickDefaultBible(state.bibles);
-      state.cmt = state.commentaries[0] || null;
-      // Prefer user-friendly Spanish-capable modules by default
-      state.dict = state.dictionaries.filter(function (d) {
-        return /vine|strong|expositivo|pik|mundo hispano|lockward|ort[ií]z|macarthur/i.test(
-          d.title + d.filename + d.abbreviation
-        );
-      })[0] || state.dictionaries[0] || null;
-      state.lex = state.lexicons.filter(function (l) {
-        return /strong/i.test(l.title + l.filename + l.abbreviation) &&
-          !/swanson|barclay|tuggy/i.test(l.title + l.filename);
-      })[0] || state.lexicons.filter(function (l) {
-        return /strong|ch[aá]vez|vine|multil/i.test(l.title + l.filename + l.abbreviation);
-      })[0] || state.lexicons[0] || null;
-      // Prefer a commentary that often has OT notes (BTX, Recobro, BE) if present
-      state.cmt = state.commentaries.filter(function (c) {
-        return /btx|recobro|rbr|scofield|expositor|vp|kadosh/i.test(
-          c.title + c.filename + c.abbreviation
-        );
-      })[0] || state.commentaries[0] || null;
+        state.bible = pickDefaultBible(state.bibles);
+        state.cmt = state.commentaries[0] || null;
+        state.dict = state.dictionaries.filter(function (d) {
+          return /vine|strong|expositivo|pik|mundo hispano|lockward|ort[ií]z|macarthur/i.test(
+            d.title + d.filename + d.abbreviation
+          );
+        })[0] || state.dictionaries[0] || null;
+        state.lex = state.lexicons.filter(function (l) {
+          return /strong/i.test(l.title + l.filename + l.abbreviation) &&
+            !/swanson|barclay|tuggy/i.test(l.title + l.filename);
+        })[0] || state.lexicons.filter(function (l) {
+          return /strong|ch[aá]vez|vine|multil/i.test(l.title + l.filename + l.abbreviation);
+        })[0] || state.lexicons[0] || null;
+        state.cmt = state.commentaries.filter(function (c) {
+          return /btx|recobro|rbr|scofield|expositor|vp|kadosh/i.test(
+            c.title + c.filename + c.abbreviation
+          );
+        })[0] || state.commentaries[0] || null;
 
-      // Restore last book / chapter / verse / modules on reopen
-      var nav = loadNavPosition();
-      if (nav) {
-        if (nav.biblePath) {
-          for (var bi = 0; bi < state.bibles.length; bi++) {
-            if (state.bibles[bi].path === nav.biblePath) {
-              state.bible = state.bibles[bi];
+        var nav = loadNavPosition();
+        if (nav) {
+          if (nav.biblePath) {
+            for (var bi = 0; bi < state.bibles.length; bi++) {
+              if (state.bibles[bi].path === nav.biblePath) {
+                state.bible = state.bibles[bi];
+                break;
+              }
+            }
+          }
+          if (nav.cmtPath) {
+            for (var ci = 0; ci < state.commentaries.length; ci++) {
+              if (state.commentaries[ci].path === nav.cmtPath) {
+                state.cmt = state.commentaries[ci];
+                break;
+              }
+            }
+          }
+          if (nav.dictPath) {
+            for (var di = 0; di < state.dictionaries.length; di++) {
+              if (state.dictionaries[di].path === nav.dictPath) {
+                state.dict = state.dictionaries[di];
+                break;
+              }
+            }
+          }
+          if (nav.lexPath) {
+            for (var li = 0; li < state.lexicons.length; li++) {
+              if (state.lexicons[li].path === nav.lexPath) {
+                state.lex = state.lexicons[li];
+                break;
+              }
+            }
+          }
+          if (nav.bookNumber >= 1 && nav.bookNumber <= 66) {
+            state.bookNumber = nav.bookNumber;
+          }
+          var maxCh = 150;
+          for (var bi2 = 0; bi2 < state.books.length; bi2++) {
+            if (state.books[bi2].number === state.bookNumber) {
+              maxCh = state.books[bi2].chapters || 150;
               break;
             }
           }
-        }
-        if (nav.cmtPath) {
-          for (var ci = 0; ci < state.commentaries.length; ci++) {
-            if (state.commentaries[ci].path === nav.cmtPath) {
-              state.cmt = state.commentaries[ci];
-              break;
-            }
+          if (nav.chapter >= 1 && nav.chapter <= maxCh) {
+            state.chapter = nav.chapter;
+          }
+          if (nav.selectedVerse != null && nav.selectedVerse >= 1) {
+            state.selectedVerse = nav.selectedVerse;
+            state.highlightMode = "verse";
           }
         }
-        if (nav.dictPath) {
-          for (var di = 0; di < state.dictionaries.length; di++) {
-            if (state.dictionaries[di].path === nav.dictPath) {
-              state.dict = state.dictionaries[di];
-              break;
-            }
-          }
+
+        var modCountEl = el("mod-count");
+        if (modCountEl) {
+          modCountEl.textContent = state.modules.length + " módulos e-Sword";
         }
-        if (nav.lexPath) {
-          for (var li = 0; li < state.lexicons.length; li++) {
-            if (state.lexicons[li].path === nav.lexPath) {
-              state.lex = state.lexicons[li];
-              break;
-            }
-          }
-        }
-        if (nav.bookNumber >= 1 && nav.bookNumber <= 66) {
-          state.bookNumber = nav.bookNumber;
-        }
-        var maxCh = 150;
-        for (var bi2 = 0; bi2 < state.books.length; bi2++) {
-          if (state.books[bi2].number === state.bookNumber) {
-            maxCh = state.books[bi2].chapters || 150;
-            break;
-          }
-        }
-        if (nav.chapter >= 1 && nav.chapter <= maxCh) {
-          state.chapter = nav.chapter;
-        }
-        if (nav.selectedVerse != null && nav.selectedVerse >= 1) {
-          state.selectedVerse = nav.selectedVerse;
-          state.highlightMode = "verse";
-        }
+
+        fillBookPill();
+        fillBiblePill();
+        fillChapterSelect();
+
+        loadParallelPrefs();
+        loadCmtLevelPrefs();
+        wireEvents();
+        loadSavedTheme();
+        var view = state.bibleView;
+        state.bibleView = "single";
+        setBibleView(view === "parallel" ? "parallel" : "single");
+        fillParallelSelects();
+        showApp();
+        updateFooter();
+        updateSelectionUI();
+        loadChapter();
+        document.title = "Asignación del Cielo Bible";
+      } catch (err) {
+        console.error(err);
+        window.__ADC_START_RUNNING__ = false;
+        setBoot("Error preparando UI: " + (err.message || err), true);
       }
-
-      el("mod-count").textContent = state.modules.length + " módulos e-Sword";
-
-      fillBookPill();
-      fillBiblePill();
-      fillChapterSelect();
-
-      loadParallelPrefs();
-      loadCmtLevelPrefs();
-      wireEvents();
-      loadSavedTheme();
-      // Apply Lectura/Paralela UI (without double-loading chapter yet)
-      var view = state.bibleView;
-      state.bibleView = "single"; // setBibleView will flip and maybe load parallel after chapter
-      setBibleView(view === "parallel" ? "parallel" : "single");
-      fillParallelSelects();
-      showApp();
-      updateFooter();
-      updateSelectionUI();
-      loadChapter();
-      document.title = "Asignación del Cielo Bible";
     }).catch(function (e) {
+      window.__ADC_START_RUNNING__ = false;
       setBoot("Error: " + (e.message || e), true);
     });
   }
@@ -5773,12 +5840,16 @@
     }
   } catch (e) {}
 
+  // Expose again after full init (boot closes over latest start)
+  window.__ADC_RUN_BOOT__ = boot;
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
   } else {
     boot();
   }
 })();
+
   </script>
 </body>
 </html>
