@@ -3658,6 +3658,9 @@
   }
 
   function wireEvents() {
+    if (window.__ADC_EVENTS_WIRED__) return;
+    window.__ADC_EVENTS_WIRED__ = true;
+
     // Custom book / bible pills (full label always visible)
     if (el("pill-book-btn")) {
       el("pill-book-btn").onclick = function (ev) {
@@ -3679,34 +3682,42 @@
       if (ev.key === "Escape") closeAllPillDropdowns();
     });
 
-    el("sel-chapter").onchange = function () {
-      state.chapter = parseInt(this.value, 10) || 1;
-      state.selectedVerse = null;
-      state.selectedWord = null;
-      loadChapter();
-    };
-    el("btn-prev").onclick = function () {
-      if (state.chapter > 1) {
-        state.chapter--;
+    if (el("sel-chapter")) {
+      el("sel-chapter").onchange = function () {
+        state.chapter = parseInt(this.value, 10) || 1;
         state.selectedVerse = null;
         state.selectedWord = null;
         loadChapter();
-      }
-    };
-    el("btn-next").onclick = function () {
-      var max = bookMeta().chapters || 1;
-      if (state.chapter < max) {
-        state.chapter++;
-        state.selectedVerse = null;
-        state.selectedWord = null;
-        loadChapter();
-      }
-    };
-    el("btn-verse-picker").onclick = openVerseModal;
-    el("verse-modal-close").onclick = closeVerseModal;
-    el("verse-modal").onclick = function (ev) {
-      if (ev.target === el("verse-modal")) closeVerseModal();
-    };
+      };
+    }
+    if (el("btn-prev")) {
+      el("btn-prev").onclick = function () {
+        if (state.chapter > 1) {
+          state.chapter--;
+          state.selectedVerse = null;
+          state.selectedWord = null;
+          loadChapter();
+        }
+      };
+    }
+    if (el("btn-next")) {
+      el("btn-next").onclick = function () {
+        var max = bookMeta().chapters || 1;
+        if (state.chapter < max) {
+          state.chapter++;
+          state.selectedVerse = null;
+          state.selectedWord = null;
+          loadChapter();
+        }
+      };
+    }
+    if (el("btn-verse-picker")) el("btn-verse-picker").onclick = openVerseModal;
+    if (el("verse-modal-close")) el("verse-modal-close").onclick = closeVerseModal;
+    if (el("verse-modal")) {
+      el("verse-modal").onclick = function (ev) {
+        if (ev.target === el("verse-modal")) closeVerseModal();
+      };
+    }
 
     // Lectura / Paralela subtabs + history
     var subtabs = el("bible-subtabs");
@@ -4205,10 +4216,24 @@
 
   // Expose again after full init (boot closes over latest start)
   window.__ADC_RUN_BOOT__ = boot;
+  window.__ADC_WIRE_EVENTS__ = wireEvents;
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot);
-  } else {
-    boot();
+  // If mini-loader already painted the shell, still take over interactions ASAP.
+  try {
+    if (window.__ADC_APP_SHOWN__ && !window.__ADC_FULL_WIRED__) {
+      boot();
+    } else if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", boot);
+    } else {
+      boot();
+    }
+  } catch (e) {
+    console.error("boot entry failed", e);
+    try {
+      wireEvents();
+    } catch (e2) {
+      console.error(e2);
+    }
   }
 })();
+

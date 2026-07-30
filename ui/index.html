@@ -1329,11 +1329,29 @@
         .trim();
     }
 
+    /** Mini interactive state (works even if app.js never loads). */
+    var M = {
+      modules: [],
+      books: [],
+      bibles: [],
+      bible: null,
+      bookNumber: 1,
+      chapter: 1,
+      loading: false
+    };
+
     function showShell(modCount) {
       var boot = document.getElementById("boot");
       var app = document.getElementById("app");
-      if (boot) boot.style.display = "none";
-      if (app) app.style.display = "flex";
+      if (boot) {
+        boot.style.display = "none";
+        boot.style.pointerEvents = "none";
+        boot.setAttribute("aria-hidden", "true");
+      }
+      if (app) {
+        app.style.display = "flex";
+        app.style.pointerEvents = "auto";
+      }
       var mc = document.getElementById("mod-count");
       if (mc) mc.textContent = modCount + " módulos e-Sword";
       var chip = document.getElementById("host-chip");
@@ -1344,9 +1362,46 @@
       window.__ADC_APP_SHOWN__ = true;
     }
 
+    function bookMeta() {
+      for (var i = 0; i < M.books.length; i++) {
+        if (M.books[i].number === M.bookNumber) return M.books[i];
+      }
+      return { name: "Libro", chapters: 1, number: M.bookNumber };
+    }
+
+    function fillChapterSelect() {
+      var sel = document.getElementById("sel-chapter");
+      if (!sel) return;
+      var max = bookMeta().chapters || 1;
+      if (M.chapter > max) M.chapter = 1;
+      sel.innerHTML = "";
+      for (var c = 1; c <= max; c++) {
+        var o = document.createElement("option");
+        o.value = String(c);
+        o.textContent = String(c);
+        sel.appendChild(o);
+      }
+      sel.value = String(M.chapter);
+    }
+
+    function syncPills() {
+      var bm = bookMeta();
+      var bookPill = document.getElementById("pill-book-text");
+      if (bookPill) bookPill.textContent = bm.name || "Libro";
+      var biblePill = document.getElementById("pill-bible-text");
+      if (biblePill && M.bible) {
+        biblePill.textContent = M.bible.abbreviation || M.bible.filename || "Biblia";
+      }
+    }
+
     function paintChapter(ch) {
       var list = document.getElementById("verse-list");
       var status = document.getElementById("chapter-status");
+      var err = document.getElementById("chapter-error");
+      if (err) {
+        err.style.display = "none";
+        err.textContent = "";
+      }
       if (!list) return;
       list.innerHTML = "";
       var verses = (ch && ch.verses) || [];
@@ -1354,6 +1409,7 @@
         var v = verses[i];
         var row = document.createElement("div");
         row.className = "verse";
+        row.setAttribute("data-verse", String(v.verse));
         var vn = document.createElement("span");
         vn.className = "vn";
         vn.textContent = String(v.verse);
@@ -1368,29 +1424,241 @@
         status.textContent =
           ((ch && (ch.moduleTitle || ch.translation)) || "") +
           " · " +
+          bookMeta().name +
+          " " +
+          M.chapter +
+          " · " +
           verses.length +
           " versículos";
       }
     }
 
+    function loadChapter() {
+      if (!M.bible || M.loading) return;
+      M.loading = true;
+      var status = document.getElementById("chapter-status");
+      if (status) {
+        status.textContent =
+          "Cargando " + bookMeta().name + " " + M.chapter + "…";
+      }
+      inv("get_bible_chapter", {
+        modulePath: M.bible.path,
+        bookNumber: M.bookNumber,
+        chapter: M.chapter
+      })
+        .then(function (ch) {
+          paintChapter(ch);
+          fillChapterSelect();
+          syncPills();
+        })
+        .catch(function (e) {
+          var err = document.getElementById("chapter-error");
+          if (err) {
+            err.style.display = "block";
+            err.textContent = String(e.message || e);
+          }
+          if (status) status.textContent = "Error al cargar capítulo";
+        })
+        .then(function () {
+          M.loading = false;
+        });
+    }
+
+    function closeAllPills() {
+      var dds = document.querySelectorAll(".pill-dd.open");
+      for (var i = 0; i < dds.length; i++) {
+        dds[i].classList.remove("open");
+        var panel = dds[i].querySelector(".pill-dd-panel");
+        if (panel) panel.hidden = true;
+      }
+    }
+
+    function fillBookPill() {
+      var panel = document.getElementById("pill-book-panel");
+      if (!panel) return;
+      panel.innerHTML = "";
+      for (var i = 0; i < M.books.length; i++) {
+        (function (b) {
+          var item = document.createElement("button");
+          item.type = "button";
+          item.className =
+            "pill-dd-item" + (b.number === M.bookNumber ? " active" : "");
+          item.textContent = b.name;
+          item.onclick = function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeAllPills();
+            if (M.bookNumber === b.number) return;
+            M.bookNumber = b.number;
+            M.chapter = 1;
+            syncPills();
+            fillChapterSelect();
+            loadChapter();
+          };
+          panel.appendChild(item);
+        })(M.books[i]);
+      }
+    }
+
+    function fillBiblePill() {
+      var panel = document.getElementById("pill-bible-panel");
+      if (!panel) return;
+      panel.innerHTML = "";
+      var cur = M.bible && M.bible.path;
+      for (var i = 0; i < M.bibles.length; i++) {
+        (function (b) {
+          var item = document.createElement("button");
+          item.type = "button";
+          item.className =
+            "pill-dd-item" + (cur && b.path === cur ? " active" : "");
+          var abbr = b.abbreviation || b.filename || "Biblia";
+          item.textContent = abbr;
+          if (b.title && b.title !== abbr) {
+            var sub = document.createElement("span");
+            sub.className = "pdd-sub";
+            sub.textContent = b.title;
+            item.appendChild(document.createElement("br"));
+            item.appendChild(sub);
+          }
+          item.onclick = function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeAllPills();
+            if (M.bible && M.bible.path === b.path) return;
+            M.bible = b;
+            syncPills();
+            loadChapter();
+          };
+          panel.appendChild(item);
+        })(M.bibles[i]);
+      }
+    }
+
+    function switchTab(tabId) {
+      var panels = document.querySelectorAll(".panel");
+      for (var i = 0; i < panels.length; i++) {
+        panels[i].classList.remove("active");
+      }
+      var tabs = document.querySelectorAll("#tabs button[data-tab]");
+      for (var t = 0; t < tabs.length; t++) {
+        tabs[t].classList.remove("active");
+        if (tabs[t].getAttribute("data-tab") === tabId) {
+          tabs[t].classList.add("active");
+        }
+      }
+      var panel = document.getElementById("panel-" + tabId);
+      if (panel) panel.classList.add("active");
+    }
+
+    function wireMini() {
+      if (window.__ADC_MINI_WIRED__) return;
+      window.__ADC_MINI_WIRED__ = true;
+
+      fillChapterSelect();
+      fillBookPill();
+      fillBiblePill();
+      syncPills();
+
+      var bookBtn = document.getElementById("pill-book-btn");
+      if (bookBtn) {
+        bookBtn.onclick = function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          var root = document.getElementById("pill-book");
+          var open = root && root.classList.contains("open");
+          closeAllPills();
+          if (!open && root) {
+            fillBookPill();
+            root.classList.add("open");
+            var panel = document.getElementById("pill-book-panel");
+            if (panel) panel.hidden = false;
+          }
+        };
+      }
+      var bibleBtn = document.getElementById("pill-bible-btn");
+      if (bibleBtn) {
+        bibleBtn.onclick = function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          var root = document.getElementById("pill-bible");
+          var open = root && root.classList.contains("open");
+          closeAllPills();
+          if (!open && root) {
+            fillBiblePill();
+            root.classList.add("open");
+            var panel = document.getElementById("pill-bible-panel");
+            if (panel) panel.hidden = false;
+          }
+        };
+      }
+      document.addEventListener("click", function (ev) {
+        if (ev.target && ev.target.closest && ev.target.closest(".pill-dd")) return;
+        closeAllPills();
+      });
+
+      var selCh = document.getElementById("sel-chapter");
+      if (selCh) {
+        selCh.onchange = function () {
+          M.chapter = parseInt(this.value, 10) || 1;
+          loadChapter();
+        };
+      }
+      var prev = document.getElementById("btn-prev");
+      if (prev) {
+        prev.onclick = function () {
+          if (M.chapter > 1) {
+            M.chapter--;
+            loadChapter();
+          }
+        };
+      }
+      var next = document.getElementById("btn-next");
+      if (next) {
+        next.onclick = function () {
+          var max = bookMeta().chapters || 1;
+          if (M.chapter < max) {
+            M.chapter++;
+            loadChapter();
+          }
+        };
+      }
+
+      var tabs = document.getElementById("tabs");
+      if (tabs) {
+        tabs.addEventListener("click", function (ev) {
+          var btn =
+            ev.target && ev.target.closest
+              ? ev.target.closest("button[data-tab]")
+              : null;
+          if (!btn) return;
+          switchTab(btn.getAttribute("data-tab"));
+        });
+      }
+
+      // Ensure main content can receive clicks (in case CSS left something blocked)
+      var app = document.getElementById("app");
+      if (app) app.style.pointerEvents = "auto";
+      var boot = document.getElementById("boot");
+      if (boot) boot.style.pointerEvents = "none";
+    }
+
     function loadFullApp() {
-      // Avoid double-insert
       if (document.getElementById("adc-app-js")) return;
-      set("Cargando funciones completas…");
       var s = document.createElement("script");
       s.id = "adc-app-js";
       s.src = "/app.js?v=" + Date.now();
       s.onload = function () {
+        console.info("[ADC] app.js loaded");
         if (typeof window.__ADC_RUN_BOOT__ === "function") {
           try {
             window.__ADC_RUN_BOOT__();
           } catch (e) {
-            console.warn("full boot failed; mini UI stays", e);
+            console.warn("full boot failed; mini interactions stay", e);
           }
         }
       };
       s.onerror = function () {
-        console.warn("app.js failed to load — mini mode only");
+        console.warn("app.js failed — using mini interactions only");
       };
       document.body.appendChild(s);
     }
@@ -1425,28 +1693,26 @@
             })[0] || bibles[0];
           if (!bible) throw new Error("No hay Biblias en e-Sword");
           set("Cargando " + (bible.abbreviation || bible.filename) + "…");
-          window.__ADC_MINI__ = {
-            modules: mods,
-            books: books,
-            bible: bible
-          };
+          M.modules = mods;
+          M.books = books;
+          M.bibles = bibles;
+          M.bible = bible;
+          M.bookNumber = 1;
+          M.chapter = 1;
+          window.__ADC_MINI__ = M;
           return inv("get_bible_chapter", {
             modulePath: bible.path,
             bookNumber: 1,
             chapter: 1
           }).then(function (ch) {
-            return { mods: mods, bible: bible, ch: ch };
+            return { mods: mods, ch: ch };
           });
         })
         .then(function (pack) {
           showShell(pack.mods.length);
           paintChapter(pack.ch);
-          var pill = document.getElementById("pill-bible-text");
-          if (pill) pill.textContent = pack.bible.abbreviation || "Biblia";
-          var bookPill = document.getElementById("pill-book-text");
-          if (bookPill) bookPill.textContent = "Génesis";
-          // Full UI (events, tabs, Strong’s…) after first paint
-          loadFullApp();
+          wireMini(); // ← clicks work immediately
+          loadFullApp(); // enhance with full app when ready
         })
         .catch(function (e) {
           console.error(e);
