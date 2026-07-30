@@ -3658,7 +3658,8 @@
   }
 
   function wireEvents() {
-    if (window.__ADC_EVENTS_WIRED__) return;
+    // Always re-bind when not fully wired, so we replace mini-loader handlers.
+    if (window.__ADC_EVENTS_WIRED__ && window.__ADC_FULL_WIRED__) return;
     window.__ADC_EVENTS_WIRED__ = true;
 
     // Custom book / bible pills (full label always visible)
@@ -3778,52 +3779,65 @@
       };
     }
 
-    wireRefPopups();
-    el("search-verse").oninput = function () {
-      renderVerses(this.value);
-    };
-    el("note-box").oninput = function () {
-      var k = noteKey();
-      if (!k) return;
-      if (!this.value.trim()) delete notes[k];
-      else notes[k] = this.value;
-      saveNotes(notes);
-    };
-    el("tabs").onclick = function (ev) {
-      var t = ev.target && ev.target.getAttribute("data-tab");
-      if (t) setTab(t);
-    };
-    el("sel-mod").onchange = function () {
-      var path = this.value;
-      if (state.tab === "comentario") {
-        for (var i = 0; i < state.commentaries.length; i++) {
-          if (state.commentaries[i].path === path) state.cmt = state.commentaries[i];
+    try { wireRefPopups(); } catch (e) { console.warn("wireRefPopups", e); }
+
+    if (el("search-verse")) {
+      el("search-verse").oninput = function () {
+        renderVerses(this.value);
+      };
+    }
+    if (el("note-box")) {
+      el("note-box").oninput = function () {
+        var k = noteKey();
+        if (!k) return;
+        if (!this.value.trim()) delete notes[k];
+        else notes[k] = this.value;
+        saveNotes(notes);
+      };
+    }
+    if (el("tabs")) {
+      el("tabs").onclick = function (ev) {
+        var btn = ev.target && ev.target.closest
+          ? ev.target.closest("[data-tab]")
+          : null;
+        var t = btn
+          ? btn.getAttribute("data-tab")
+          : (ev.target && ev.target.getAttribute("data-tab"));
+        if (t) setTab(t);
+      };
+    }
+    if (el("sel-mod")) {
+      el("sel-mod").onchange = function () {
+        var path = this.value;
+        if (state.tab === "comentario") {
+          for (var i = 0; i < state.commentaries.length; i++) {
+            if (state.commentaries[i].path === path) state.cmt = state.commentaries[i];
+          }
+          var t = el("term-search") ? el("term-search").value.trim() : "";
+          if (t) runCommentarySearch(t, true);
+          else loadCommentariesForVerse();
+        } else if (state.tab === "diccionario") {
+          for (var j = 0; j < state.dictionaries.length; j++) {
+            if (state.dictionaries[j].path === path) state.dict = state.dictionaries[j];
+          }
+          var td = (el("term-search") && el("term-search").value.trim()) || state.selectedWord || "";
+          if (td) runDictionarySearch(td, true);
+          else if (el("dict-list")) {
+            el("dict-list").innerHTML = '<div class="status">Escribe una palabra para buscar en este diccionario.</div>';
+          }
+        } else if (state.tab === "lexico") {
+          for (var k = 0; k < state.lexicons.length; k++) {
+            if (state.lexicons[k].path === path) state.lex = state.lexicons[k];
+          }
+          var tl = (el("term-search") && el("term-search").value.trim()) || state.selectedWord || "H1254";
+          if (el("term-search")) el("term-search").value = tl;
+          runLexiconSearch(tl, true);
         }
-        // Por defecto: comentario del versículo (lo que indica el ●)
-        var t = el("term-search").value.trim();
-        if (t) runCommentarySearch(t, true);
-        else loadCommentariesForVerse();
-      } else if (state.tab === "diccionario") {
-        for (var j = 0; j < state.dictionaries.length; j++) {
-          if (state.dictionaries[j].path === path) state.dict = state.dictionaries[j];
-        }
-        var td = el("term-search").value.trim() || state.selectedWord || "";
-        if (td) runDictionarySearch(td, true);
-        else {
-          el("dict-list").innerHTML = '<div class="status">Escribe una palabra para buscar en este diccionario.</div>';
-        }
-      } else if (state.tab === "lexico") {
-        for (var k = 0; k < state.lexicons.length; k++) {
-          if (state.lexicons[k].path === path) state.lex = state.lexicons[k];
-        }
-        var tl = el("term-search").value.trim() || state.selectedWord || "H1254";
-        el("term-search").value = tl;
-        runLexiconSearch(tl, true);
-      }
-    };
+      };
+    }
 
     var termTimer;
-    el("term-search").oninput = function () {
+    if (el("term-search")) el("term-search").oninput = function () {
       var term = this.value.trim();
       clearTimeout(termTimer);
       termTimer = setTimeout(function () {
@@ -3848,29 +3862,37 @@
         }
       }, 280);
     };
-    el("term-search").onkeydown = function (ev) {
-      if (ev.key === "Escape") closeSuggest();
-    };
+    if (el("term-search")) {
+      el("term-search").onkeydown = function (ev) {
+        if (ev.key === "Escape") closeSuggest();
+      };
+    }
     document.addEventListener("click", function (ev) {
-      if (!el("term-search-wrap").contains(ev.target)) closeSuggest();
+      var wrap = el("term-search-wrap");
+      if (wrap && !wrap.contains(ev.target)) closeSuggest();
     });
 
-    el("btn-to-dict").onclick = function () {
-      goToStudyTab("diccionario");
-    };
-    el("btn-to-lex").onclick = function () {
-      if (!state.selectedWord) return;
-      // Resolve Spanish → Strong’s first, then open Léxico with G/H code
-      if (state.selectedStrongs && state.selectedStrongs.length) {
-        openLexiconWithStrongs();
-      } else {
-        resolveSelectedStrongs(true);
-      }
-    };
-    el("btn-to-cmt").onclick = function () {
-      goToStudyTab("comentario");
-    };
-    el("btn-clear-sel").onclick = clearSelection;
+    if (el("btn-to-dict")) {
+      el("btn-to-dict").onclick = function () {
+        goToStudyTab("diccionario");
+      };
+    }
+    if (el("btn-to-lex")) {
+      el("btn-to-lex").onclick = function () {
+        if (!state.selectedWord) return;
+        if (state.selectedStrongs && state.selectedStrongs.length) {
+          openLexiconWithStrongs();
+        } else {
+          resolveSelectedStrongs(true);
+        }
+      };
+    }
+    if (el("btn-to-cmt")) {
+      el("btn-to-cmt").onclick = function () {
+        goToStudyTab("comentario");
+      };
+    }
+    if (el("btn-clear-sel")) el("btn-clear-sel").onclick = clearSelection;
 
     // Commentary level filters (verse / chapter / book isolation)
     function onCmtLevelChange() {
@@ -4050,6 +4072,12 @@
   function start() {
     if (window.__ADC_START_RUNNING__) return;
     window.__ADC_START_RUNNING__ = true;
+    // Allow re-wiring when taking over from mini-loader
+    window.__ADC_EVENTS_WIRED__ = false;
+
+    // Prefer live re-scan; seed defaults from mini so first paint stays consistent
+    var mini = window.__ADC_MINI__ || null;
+
     setBoot("Escaneando e-Sword…");
     var scanTimeout = new Promise(function (_, reject) {
       setTimeout(function () {
@@ -4074,7 +4102,21 @@
         state.dictionaries = state.modules.filter(function (m) { return m.moduleType === "dictionary"; });
         state.lexicons = state.modules.filter(function (m) { return m.moduleType === "lexicon"; });
 
-        state.bible = pickDefaultBible(state.bibles);
+        // Keep mini navigation if present so chapter/bible stay synced
+        if (mini && mini.bible && mini.bible.path) {
+          var keep = null;
+          for (var mi = 0; mi < state.bibles.length; mi++) {
+            if (state.bibles[mi].path === mini.bible.path) {
+              keep = state.bibles[mi];
+              break;
+            }
+          }
+          state.bible = keep || pickDefaultBible(state.bibles);
+          if (mini.bookNumber) state.bookNumber = mini.bookNumber;
+          if (mini.chapter) state.chapter = mini.chapter;
+        } else {
+          state.bible = pickDefaultBible(state.bibles);
+        }
         state.cmt = state.commentaries[0] || null;
         state.dict = state.dictionaries.filter(function (d) {
           return /vine|strong|expositivo|pik|mundo hispano|lockward|ort[ií]z|macarthur/i.test(

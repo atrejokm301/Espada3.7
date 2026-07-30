@@ -1534,6 +1534,61 @@
       }
     }
 
+    var MINI_THEMES = [
+      { id: "plain-white", name: "Plain White", desc: "Fondo blanco limpio.", swatch: "#ffffff", swatchText: "#0f172a", accent: "#1d4ed8" },
+      { id: "pastel-green", name: "Pastel Green", desc: "Verde suave.", swatch: "#eef8f0", swatchText: "#14352a", accent: "#0f766e" },
+      { id: "pastel-yellow", name: "Pastel Yellow", desc: "Crema cálido.", swatch: "#fff9e8", swatchText: "#3b2f0b", accent: "#a16207" },
+      { id: "light-blue", name: "Light Blue", desc: "Azul claro.", swatch: "#eef6ff", swatchText: "#0c2a4a", accent: "#1d4ed8" },
+      { id: "true-dark", name: "True Dark Mode", desc: "Negro total.", swatch: "#000000", swatchText: "#fafafa", accent: "#60a5fa" },
+      { id: "fluent-glass", name: "Fluent Glass", desc: "Tema escritorio.", swatch: "rgba(30,40,55,.55)", swatchText: "#e0f2fe", accent: "#7dd3fc" }
+    ];
+
+    function applyMiniTheme(id) {
+      var ok = false;
+      for (var i = 0; i < MINI_THEMES.length; i++) {
+        if (MINI_THEMES[i].id === id) ok = true;
+      }
+      if (!ok) id = "true-dark";
+      document.documentElement.setAttribute("data-theme", id);
+      try { localStorage.setItem("adc-bible-theme-v1", id); } catch (e) {}
+      M.theme = id;
+      renderMiniThemes();
+    }
+
+    function renderMiniThemes() {
+      var grid = document.getElementById("theme-grid");
+      if (!grid) return;
+      var cur = M.theme || "true-dark";
+      try { cur = localStorage.getItem("adc-bible-theme-v1") || cur; } catch (e) {}
+      M.theme = cur;
+      grid.innerHTML = "";
+      for (var i = 0; i < MINI_THEMES.length; i++) {
+        (function (t) {
+          var card = document.createElement("div");
+          card.className = "theme-card" + (M.theme === t.id ? " selected" : "");
+          card.setAttribute("role", "button");
+          card.tabIndex = 0;
+          card.innerHTML =
+            '<div class="theme-swatch" style="background:' + t.swatch + ';color:' + t.swatchText + '">' +
+              '<span class="sample-title" style="color:' + t.accent + '">Juan 3:16</span>' +
+              '<span class="sample-jesus">“Sígueme”</span>' +
+            "</div>" +
+            '<div class="theme-card-body"><h3></h3><p></p></div>' +
+            '<div class="check">✓ Tema activo</div>';
+          card.querySelector("h3").textContent = t.name;
+          card.querySelector("p").textContent = t.desc;
+          card.onclick = function () { applyMiniTheme(t.id); };
+          card.onkeydown = function (ev) {
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              applyMiniTheme(t.id);
+            }
+          };
+          grid.appendChild(card);
+        })(MINI_THEMES[i]);
+      }
+    }
+
     function switchTab(tabId) {
       var panels = document.querySelectorAll(".panel");
       for (var i = 0; i < panels.length; i++) {
@@ -1548,6 +1603,13 @@
       }
       var panel = document.getElementById("panel-" + tabId);
       if (panel) panel.classList.add("active");
+      // Hide study modbar on biblia/temas
+      var modbar = document.getElementById("modbar");
+      if (modbar) {
+        if (tabId === "biblia" || tabId === "temas") modbar.classList.remove("show");
+        else modbar.classList.add("show");
+      }
+      if (tabId === "temas") renderMiniThemes();
     }
 
     function wireMini() {
@@ -1709,10 +1771,20 @@
           });
         })
         .then(function (pack) {
+          // Apply saved theme before showing shell
+          try {
+            var tid = localStorage.getItem("adc-bible-theme-v1") || "fluent-glass";
+            document.documentElement.setAttribute("data-theme", tid);
+            M.theme = tid;
+          } catch (e) {
+            M.theme = "fluent-glass";
+            document.documentElement.setAttribute("data-theme", "fluent-glass");
+          }
           showShell(pack.mods.length);
           paintChapter(pack.ch);
-          wireMini(); // ← clicks work immediately
-          loadFullApp(); // enhance with full app when ready
+          wireMini(); // clicks + themes work immediately (synced mini state)
+          renderMiniThemes(); // prebuild theme cards
+          loadFullApp(); // optional full app enhancement
         })
         .catch(function (e) {
           console.error(e);
