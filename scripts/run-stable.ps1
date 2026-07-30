@@ -1,9 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Stable shell: adc-api + Microsoft Edge app window (NO WinUI / embedded WebView2).
-
-  Use this when the WinUI host crashes. Same UI + same e-Sword backend.
+  Stable shell: keep adc-api alive + open Edge app window.
 #>
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -18,60 +16,79 @@ $tauri = Join-Path $Root "src-tauri"
 $ui = Join-Path $Root "ui"
 $port = 17865
 $url = "http://127.0.0.1:$port/"
-
-Write-Host "==> Building adc-api…" -ForegroundColor Cyan
-Push-Location $tauri
-try { cargo build --bin adc-api } finally { Pop-Location }
-
 $apiExe = Join-Path $tauri "target\debug\adc-api.exe"
-if (-not (Test-Path $apiExe)) { throw "missing $apiExe" }
+$logDir = Join-Path $env:LOCALAPPDATA "asignacion-del-cielo-bible"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$pidFile = Join-Path $logDir "adc-api.pid"
 
-# Kill previous API on this port path
-Get-Process -Name "adc-api" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 400
-
-$env:ADC_UI_DIR = $ui
-$env:ADC_API_PORT = "$port"
-
-Write-Host "==> Starting API + UI server on $url" -ForegroundColor Cyan
-$api = Start-Process -FilePath $apiExe -PassThru -WindowStyle Hidden
-Start-Sleep -Seconds 1
-
-$healthy = $false
-for ($i = 0; $i -lt 30; $i++) {
+function Test-ApiHealthy {
   try {
-    $h = Invoke-RestMethod "$url`health" -TimeoutSec 1
-    if ($h.ok) { $healthy = $true; break }
-  } catch { Start-Sleep -Milliseconds 200 }
-}
-if (-not $healthy) {
-  Stop-Process -Id $api.Id -Force -ErrorAction SilentlyContinue
-  throw "adc-api did not become healthy"
+    $h = Invoke-RestMethod -Uri ("{0}health" -f $url) -TimeoutSec 2
+    return [bool]$h.ok
+  } catch {
+    return $false
+  }
 }
 
-# Prefer Edge app window; fall back to default browser
-$edgeCandidates = @(
+Write-Host "==> Repo: $Root" -ForegroundColor Cyan
+
+if (-not (Test-Path $apiExe)) {
+  Write-Host "==> Building adc-api…" -ForegroundColor Cyan
+  Push-Location $tauri
+  try { cargo build --bin adc-api } finally { Pop-Location }
+}
+if (-not (Test-Path $apiExe)) { throw "adc-api.exe missing after build" }
+
+if (Test-ApiHealthy) {
+  Write-Host "==> adc-api already healthy" -ForegroundColor DarkGray
+} else {
+  Get-Process -Name "adc-api" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 400
+
+  Write-Host "==> Starting adc-api…" -ForegroundColor Cyan
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $apiExe
+  $psi.WorkingDirectory = $tauri
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  # Critical: do not redirect stdout/stderr without a reader (deadlocks the process).
+  $psi.EnvironmentVariables["ADC_UI_DIR"] = $ui
+  $psi.EnvironmentVariables["ADC_API_PORT"] = "$port"
+  $proc = New-Object System.Diagnostics.Process
+  $proc.StartInfo = $psi
+  if (-not $proc.Start()) { throw "Failed to start adc-api" }
+
+  Set-Content -Path $pidFile -Value $proc.Id -Encoding ascii
+  Write-Host "    PID $($proc.Id)"
+
+  $ok = $false
+  for ($i = 1; $i -le 50; $i++) {
+    Start-Sleep -Milliseconds 200
+    if ($proc.HasExited) {
+      throw "adc-api exited immediately (code $($proc.ExitCode))"
+    }
+    if (Test-ApiHealthy) { $ok = $true; break }
+  }
+  if (-not $ok) { throw "adc-api did not become healthy on $url" }
+}
+
+Write-Host "==> Healthy: $url" -ForegroundColor Green
+
+$edge = @(
   "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
   "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
   "$env:LocalAppData\Microsoft\Edge\Application\msedge.exe"
-)
-$edge = $edgeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
 if ($edge) {
-  Write-Host "==> Opening Edge app window: $url" -ForegroundColor Green
-  Start-Process -FilePath $edge -ArgumentList @(
-    "--app=$url",
-    "--new-window",
-    "--disable-features=msEdgeSidebar"
-  )
+  Write-Host "==> Opening Edge app…" -ForegroundColor Cyan
+  Start-Process -FilePath $edge -ArgumentList @("--app=$url", "--new-window")
 } else {
-  Write-Host "==> Edge not found; opening default browser: $url" -ForegroundColor Yellow
   Start-Process $url
 }
 
 Write-Host ""
-Write-Host "Stable shell is up." -ForegroundColor Green
-Write-Host "  UI:  $url"
-Write-Host "  API: adc-api PID $($api.Id)"
-Write-Host "  Close the browser window when done; stop API with: Stop-Process -Name adc-api"
+Write-Host "Listo. Si sigue en 'Iniciando…', pulsa Ctrl+R en la ventana." -ForegroundColor Green
+Write-Host "  $url"
+Write-Host "  Stop: Stop-Process -Name adc-api"
 Write-Host ""

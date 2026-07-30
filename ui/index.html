@@ -1554,6 +1554,26 @@
     if (err) bootMsg.style.color = "#f87171";
   }
 
+  /** Resolve HTTP API base for adc-api (WinUI inject, Edge app, or same-origin). */
+  function getApiBase() {
+    if (window.__ADC_API_BASE__) {
+      return String(window.__ADC_API_BASE__).replace(/\/$/, "");
+    }
+    // Served by adc-api itself (http://127.0.0.1:17865/)
+    try {
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        if (
+          location.hostname === "127.0.0.1" ||
+          location.hostname === "localhost" ||
+          location.port === "17865"
+        ) {
+          return location.origin;
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+
   function getInvoke() {
     // 1) Tauri desktop host
     if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
@@ -1562,15 +1582,24 @@
     if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
       return window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
     }
-    // 2) WinUI 3 host → Rust adc-api sidecar (same command names)
-    if (window.__ADC_API_BASE__) {
-      var base = String(window.__ADC_API_BASE__).replace(/\/$/, "");
+    // 2) HTTP sidecar (WinUI / Edge stable / same-origin)
+    var base = getApiBase();
+    if (base) {
       return function adcInvoke(cmd, args) {
+        var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+        var timer = null;
+        if (ctrl) {
+          timer = setTimeout(function () {
+            try { ctrl.abort(); } catch (e) {}
+          }, 60000);
+        }
         return fetch(base + "/invoke", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cmd: cmd, args: args || {} })
+          body: JSON.stringify({ cmd: cmd, args: args || {} }),
+          signal: ctrl ? ctrl.signal : undefined
         }).then(function (res) {
+          if (timer) clearTimeout(timer);
           return res.json().then(function (body) {
             if (!res.ok) {
               throw new Error((body && body.error) || ("HTTP " + res.status));
@@ -1582,6 +1611,9 @@
               ? body.result
               : body;
           });
+        }).catch(function (e) {
+          if (timer) clearTimeout(timer);
+          throw e;
         });
       };
     }
@@ -1592,16 +1624,16 @@
     var inv = getInvoke();
     if (!inv) {
       return Promise.reject(new Error(
-        "No hay API (Tauri o WinUI/adc-api). Abrí la ventana de escritorio de la app."
+        "No hay API. Ejecutá: .\\scripts\\run-stable.ps1  (o Tauri / WinUI)."
       ));
     }
     try {
       return Promise.resolve(inv(cmd, args || {})).catch(function (e) {
         var msg = e && e.message ? e.message : String(e);
-        // Friendlier offline / API-down errors
-        if (/Failed to fetch|NetworkError|fetch/i.test(msg)) {
+        if (/Failed to fetch|NetworkError|fetch|abort|AbortError/i.test(msg)) {
           return Promise.reject(new Error(
-            "No se pudo contactar el API (adc-api). ¿Se cerró el proceso?"
+            "No se pudo contactar adc-api en " + (getApiBase() || "127.0.0.1:17865") +
+            ". ¿Se cerró el servidor? Ejecutá .\\scripts\\run-stable.ps1"
           ));
         }
         return Promise.reject(e instanceof Error ? e : new Error(msg));
@@ -1609,6 +1641,14 @@
     } catch (e) {
       return Promise.reject(e instanceof Error ? e : new Error(String(e)));
     }
+  }
+
+  function pingApi() {
+    var base = getApiBase();
+    if (!base) return Promise.resolve(false);
+    return fetch(base + "/health", { method: "GET", cache: "no-store" })
+      .then(function (r) { return r.ok; })
+      .catch(function () { return false; });
   }
 
   /** Monotonic token so stale chapter loads don't clobber a newer Bible selection. */
@@ -5474,31 +5514,67 @@
   }
 
   function boot() {
-    var hostHint = window.__ADC_HOST__ === "winui3"
-      ? "Conectando con WinUI 3 + adc-api…"
-      : "Conectando con Tauri…";
+    var host = window.__ADC_HOST__ || "";
+    var hostHint =
+      host === "winui3" ? "Conectando con WinUI 3 + adc-api…" :
+      host === "edge-app" ? "Conectando con shell estable…" :
+      getApiBase() ? "Conectando con adc-api…" :
+      "Buscando API…";
     setBoot(hostHint);
-    if (!getInvoke()) {
-      setTimeout(function () {
-        if (!getInvoke()) {
+
+    var tries = 0;
+    var maxTries = 40; // ~10s
+
+    function attempt() {
+      tries++;
+      if (!getInvoke()) {
+        if (tries >= maxTries) {
           setBoot(
-            "Sin API. Usá Tauri (cargo run) o WinUI (scripts\\run-winui.ps1).",
+            "Sin API. En PowerShell:  .\\scripts\\run-stable.ps1",
             true
           );
           return;
         }
+        setBoot("Esperando adc-api… (" + tries + "/" + maxTries + ")");
+        setTimeout(attempt, 250);
+        return;
+      }
+      // Invoke exists — make sure /health answers before scanning modules
+      pingApi().then(function (ok) {
+        if (!ok) {
+          if (tries >= maxTries) {
+            setBoot(
+              "adc-api no responde en " + (getApiBase() || "127.0.0.1:17865") +
+              ". Ejecutá .\\scripts\\run-stable.ps1",
+              true
+            );
+            return;
+          }
+          setBoot("API no lista… reintentando (" + tries + "/" + maxTries + ")");
+          setTimeout(attempt, 250);
+          return;
+        }
         start();
-      }, 400);
-      return;
+      });
     }
-    start();
+    attempt();
   }
 
   function start() {
     setBoot("Escaneando e-Sword…");
-    Promise.all([
-      invoke("list_esword_modules", { path: null }),
-      invoke("list_bible_books")
+    var scanTimeout = new Promise(function (_, reject) {
+      setTimeout(function () {
+        reject(new Error(
+          "Timeout escaneando e-Sword (45s). ¿La carpeta de e-Sword existe?"
+        ));
+      }, 45000);
+    });
+    Promise.race([
+      Promise.all([
+        invoke("list_esword_modules", { path: null }),
+        invoke("list_bible_books")
+      ]),
+      scanTimeout
     ]).then(function (pair) {
       state.modules = pair[0] || [];
       state.books = pair[1] || [];
