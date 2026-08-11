@@ -35,7 +35,7 @@ try {
         <App />
       </React.StrictMode>,
     );
-    document.title = "Asignación del Cielo Bible";
+    document.title = "Espada 3.7 (Windows)";
   }
 } catch (err) {
   showFatal(err);

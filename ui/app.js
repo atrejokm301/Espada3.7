@@ -10,23 +10,42 @@
     bootMsg.textContent = t;
     bootMsg.style.color = err ? "#f87171" : "";
     if (err && bootHint && !bootHint.textContent) {
-      bootHint.textContent = "Si el servidor murió: Start-ADC-Stable.bat";
+      bootHint.textContent = "App nativa: Start-ADC-Native.bat  ·  Fallback: Start-ADC-Stable.bat";
     }
   }
 
-  /** Resolve HTTP API base for adc-api (WinUI inject, Edge app, or same-origin). */
+  /** Tauri desktop IPC (preferred over HTTP when present). */
+  function getTauriInvoke() {
+    try {
+      if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+        return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+      }
+      if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+        return window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  /**
+   * HTTP API base for adc-api only (WinUI inject / Edge stable on :17865).
+   * Never use Tauri asset origins (127.0.0.1:1430 etc.) — they serve HTML.
+   */
   function getApiBase() {
     if (window.__ADC_API_BASE__) {
-      return String(window.__ADC_API_BASE__).replace(/\/$/, "");
+      var injected = String(window.__ADC_API_BASE__).replace(/\/$/, "");
+      // Ignore poisoned base from older mini-loader pointing at Tauri asset port
+      try {
+        if (injected && /:(1420|1430|5173)(\/|$)/.test(injected)) {
+          return null;
+        }
+      } catch (e) {}
+      return injected || null;
     }
-    // Served by adc-api itself (http://127.0.0.1:17865/)
     try {
       if (location.protocol === "http:" || location.protocol === "https:") {
-        if (
-          location.hostname === "127.0.0.1" ||
-          location.hostname === "localhost" ||
-          location.port === "17865"
-        ) {
+        // Stable sidecar only — not every localhost (Tauri uses random/high ports)
+        if (String(location.port) === "17865") {
           return location.origin;
         }
       }
@@ -35,14 +54,13 @@
   }
 
   function getInvoke() {
-    // 1) Tauri desktop host
-    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-      return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+    // 1) Tauri desktop host (IPC)
+    var tinv = getTauriInvoke();
+    if (tinv) {
+      if (!window.__ADC_HOST__) window.__ADC_HOST__ = "tauri";
+      return tinv;
     }
-    if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
-      return window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
-    }
-    // 2) HTTP sidecar (WinUI / Edge stable / same-origin)
+    // 2) HTTP sidecar (WinUI / Edge stable)
     var base = getApiBase();
     if (base) {
       return function adcInvoke(cmd, args) {
@@ -60,6 +78,15 @@
           signal: ctrl ? ctrl.signal : undefined
         }).then(function (res) {
           if (timer) clearTimeout(timer);
+          var ct = (res.headers && res.headers.get("content-type")) || "";
+          if (ct.indexOf("json") === -1) {
+            return res.text().then(function (txt) {
+              throw new Error(
+                "Respuesta no-JSON desde " + base + "/invoke (¿host Tauri mal configurado?). " +
+                String(txt || "").slice(0, 48)
+              );
+            });
+          }
           return res.json().then(function (body) {
             if (!res.ok) {
               throw new Error((body && body.error) || ("HTTP " + res.status));
@@ -84,7 +111,7 @@
     var inv = getInvoke();
     if (!inv) {
       return Promise.reject(new Error(
-        "No hay API. Ejecutá: .\\scripts\\run-stable.ps1  (o Tauri / WinUI)."
+        "No hay API nativa. Ejecutá: Start-ADC-Native.bat  (o npm run tauri:dev)"
       ));
     }
     try {
@@ -92,8 +119,8 @@
         var msg = e && e.message ? e.message : String(e);
         if (/Failed to fetch|NetworkError|fetch|abort|AbortError/i.test(msg)) {
           return Promise.reject(new Error(
-            "No se pudo contactar adc-api en " + (getApiBase() || "127.0.0.1:17865") +
-            ". ¿Se cerró el servidor? Ejecutá .\\scripts\\run-stable.ps1"
+            "No se pudo contactar la API en " + (getApiBase() || "Tauri IPC") +
+            ". ¿Se cerró el host? Start-ADC-Native.bat  o  npm run tauri:dev"
           ));
         }
         return Promise.reject(e instanceof Error ? e : new Error(msg));
@@ -104,6 +131,8 @@
   }
 
   function pingApi() {
+    // Tauri IPC is always "up" when the bridge exists
+    if (getTauriInvoke()) return Promise.resolve(true);
     var base = getApiBase();
     if (!base) return Promise.resolve(false);
     return fetch(base + "/health", { method: "GET", cache: "no-store" })
@@ -136,6 +165,7 @@
     highlightMode: null,     // 'verse' | 'word' | null
     tab: "biblia",
     theme: "true-dark",
+    font: "google-sans-flex", // UI font id (HE/EL always Libertinus Serif)
     bibleView: "single",     // 'single' | 'parallel'
     parallelPaths: ["", ""], // up to 2 extra bible module paths
     parallelByPath: {},      // path -> { verses: [], title, abbr }
@@ -153,64 +183,59 @@
 
   var NOTES_KEY = "adc-bible-notes-v1";
   var THEME_KEY = "adc-bible-theme-v1";
+  var FONT_KEY = "adc-bible-font-v1";
   var NAV_KEY = "adc-bible-nav-v1"; // book / chapter / verse / bible path
   var HL_KEY = "adc-bible-highlights-v1"; // semantic style ids, never raw hex
   var PARALLEL_KEY = "adc-bible-parallel-v1";
   var HISTORY_KEY = "adc-bible-history-v1";
   var HISTORY_MAX = 40;
+  /** UI fonts only — Hebrew/Greek always use Libertinus Serif via CSS. */
+  var UI_FONTS = [
+    {
+      id: "google-sans-flex",
+      name: "Google Sans Flex",
+      sample: "Aa Bb · Juan 3:16 · Biblia",
+      stack: '"Google Sans Flex", "Segoe UI", system-ui, sans-serif'
+    },
+    {
+      id: "roboto",
+      name: "Roboto",
+      sample: "Aa Bb · Juan 3:16 · Biblia",
+      stack: '"Roboto", "Segoe UI", system-ui, sans-serif'
+    },
+    {
+      id: "inter",
+      name: "Inter",
+      sample: "Aa Bb · Juan 3:16 · Biblia",
+      stack: '"Inter", "Segoe UI", system-ui, sans-serif'
+    },
+    {
+      id: "roboto-flex",
+      name: "Roboto Flex",
+      sample: "Aa Bb · Juan 3:16 · Biblia",
+      stack: '"Roboto Flex", "Roboto", "Segoe UI", system-ui, sans-serif'
+    }
+  ];
+  var DEFAULT_FONT_ID = "google-sans-flex";
   var WOC_OPEN = "\uE000";
   var WOC_CLOSE = "\uE001";
   /** Named styles only — CSS vars per theme map these to colors */
   var HL_STYLES = ["gold", "sky", "rose", "lime", "violet", "peach"];
 
   var THEMES = [
-    {
-      id: "plain-white",
-      name: "Plain White",
-      desc: "Fondo blanco limpio, texto oscuro muy legible.",
-      swatch: "#ffffff",
-      swatchText: "#0f172a",
-      accent: "#1d4ed8"
-    },
-    {
-      id: "pastel-green",
-      name: "Pastel Green",
-      desc: "Verde suave, sin cansar la vista.",
-      swatch: "#eef8f0",
-      swatchText: "#14352a",
-      accent: "#0f766e"
-    },
-    {
-      id: "pastel-yellow",
-      name: "Pastel Yellow",
-      desc: "Crema cálido, ideal para lecturas largas.",
-      swatch: "#fff9e8",
-      swatchText: "#3b2f0b",
-      accent: "#a16207"
-    },
-    {
-      id: "light-blue",
-      name: "Light Blue",
-      desc: "Azul claro fresco y simple.",
-      swatch: "#eef6ff",
-      swatchText: "#0c2a4a",
-      accent: "#1d4ed8"
-    },
-    {
-      id: "true-dark",
-      name: "True Dark Mode",
-      desc: "Negro total (#000) con acento azul y tipografía clara.",
-      swatch: "#000000",
-      swatchText: "#fafafa",
-      accent: "#60a5fa"
-    },
+    { id: "plain-white", name: "Plain White", swatch: "#ffffff", accent: "#1d4ed8", glass: false },
+    { id: "pastel-green", name: "Pastel Green", swatch: "#eef8f0", accent: "#0f766e", glass: false },
+    { id: "pastel-yellow", name: "Pastel Yellow", swatch: "#fff9e8", accent: "#a16207", glass: false },
+    { id: "light-blue", name: "Light Blue", swatch: "#eef6ff", accent: "#1d4ed8", glass: false },
+    { id: "true-dark", name: "True Dark Solid", swatch: "#000000", accent: "#60a5fa", glass: false },
     {
       id: "fluent-glass",
       name: "Fluent Glass",
-      desc: "Translúcido para WinUI 3 (Acrylic/Mica). Deja ver el fondo del escritorio.",
       swatch: "rgba(30,40,55,.55)",
-      swatchText: "#e0f2fe",
-      accent: "#7dd3fc"
+      accent: "#7dd3fc",
+      glass: true,
+      /* Original navy-slate acrylic tint (not pure black) */
+      acrylic: { r: 16, g: 20, b: 30, a: 120 }
     }
   ];
 
@@ -452,6 +477,88 @@
     return copyTextToClipboard(payload.text);
   }
 
+  /* ---------- In-app e-ink verse preview (no hardware) ---------- */
+  var einkState = { size: "md" };
+
+  function einkPayload() {
+    var bm = bookMeta();
+    var ref = bm.name + " " + state.chapter;
+    if (state.selectedVerse != null) ref += ":" + state.selectedVerse;
+    var bible = state.bible
+      ? (state.bible.abbreviation || state.bible.filename || "")
+      : "";
+    var body = "";
+    if (state.selectedVerse != null) {
+      body = getVersePlainText(state.selectedVerse);
+    }
+    return {
+      ref: ref,
+      body: body,
+      bible: bible,
+      text: (body ? body + "\n\n— " : "") + ref + (bible ? " (" + bible + ")" : "")
+    };
+  }
+
+  function refreshEinkPreview() {
+    var board = el("eink-board");
+    var empty = el("eink-empty");
+    var textEl = el("eink-verse-text");
+    var refEl = el("eink-verse-ref");
+    var metaEl = el("eink-verse-meta");
+    var copyBtn = el("eink-copy");
+    if (!board || !textEl || !refEl) return;
+
+    board.classList.remove("eink-size-sm", "eink-size-md", "eink-size-lg");
+    board.classList.add("eink-size-" + (einkState.size || "md"));
+
+    var sizeBtns = document.querySelectorAll("[data-eink-size]");
+    for (var i = 0; i < sizeBtns.length; i++) {
+      var sz = sizeBtns[i].getAttribute("data-eink-size");
+      if (sz === einkState.size) sizeBtns[i].classList.add("active");
+      else sizeBtns[i].classList.remove("active");
+    }
+
+    var p = einkPayload();
+    var hasVerse = state.selectedVerse != null && p.body;
+    if (empty) empty.hidden = !!hasVerse;
+    textEl.hidden = !hasVerse;
+    refEl.hidden = !hasVerse;
+    if (metaEl) metaEl.hidden = !hasVerse;
+    if (copyBtn) copyBtn.disabled = !hasVerse;
+
+    if (hasVerse) {
+      textEl.textContent = p.body;
+      refEl.textContent = "— " + p.ref;
+      if (metaEl) metaEl.textContent = p.bible ? p.bible : "";
+    } else {
+      textEl.textContent = "";
+      refEl.textContent = "";
+      if (metaEl) metaEl.textContent = "";
+    }
+  }
+
+  function openEinkPreview() {
+    if (state.selectedVerse == null && state.verses && state.verses.length) {
+      selectVerse(state.verses[0].verse, false);
+    }
+    if (state.selectedVerse == null) return;
+    refreshEinkPreview();
+    var modal = el("eink-modal");
+    if (!modal) return;
+    modal.classList.add("open");
+  }
+
+  function closeEinkPreview() {
+    var modal = el("eink-modal");
+    if (modal) modal.classList.remove("open");
+  }
+
+  function setEinkSize(size) {
+    if (size !== "sm" && size !== "md" && size !== "lg") return;
+    einkState.size = size;
+    refreshEinkPreview();
+  }
+
   /* ---------- Soft context menu (right-click) ---------- */
   var ctxState = { open: false, x: 0, y: 0 };
 
@@ -549,22 +656,70 @@
     openCtxMenu(ev.clientX, ev.clientY);
   }
 
-  function applyTheme(id) {
-    var ok = false;
+  function findTheme(id) {
     for (var i = 0; i < THEMES.length; i++) {
-      if (THEMES[i].id === id) { ok = true; break; }
+      if (THEMES[i].id === id) return THEMES[i];
     }
-    // Migrate removed themes (e.g. liquid-glass) to True Dark
-    if (!ok) id = "true-dark";
+    return null;
+  }
+
+  /** Windows Acrylic — only for True Dark Glass (fluent-glass). Debounced: never during e-Sword scan. */
+  var _glassTimer = null;
+  var _glassBootReady = false;
+  function setNativeGlass(enabled, acrylic) {
+    if (!getTauriInvoke()) return;
+    if (_glassTimer) clearTimeout(_glassTimer);
+    // Defer until boot finished so acrylic + SQLite scan don't race the compositor
+    var delay = _glassBootReady ? 80 : 600;
+    _glassTimer = setTimeout(function () {
+      var args = { enabled: !!enabled };
+      if (enabled && acrylic) {
+        args.r = acrylic.r;
+        args.g = acrylic.g;
+        args.b = acrylic.b;
+        args.a = acrylic.a;
+      }
+      try {
+        invoke("set_window_glass", args).catch(function (e) {
+          console.warn("[ADC] set_window_glass failed", e);
+        });
+      } catch (e) {
+        console.warn("[ADC] set_window_glass", e);
+      }
+    }, delay);
+  }
+
+  function markGlassBootReady() {
+    _glassBootReady = true;
+    // Re-apply glass once UI is up (if still on fluent-glass)
+    if (state.theme === "fluent-glass") {
+      var theme = findTheme("fluent-glass");
+      setNativeGlass(true, theme && theme.acrylic ? theme.acrylic : { r: 16, g: 20, b: 30, a: 120 });
+    }
+  }
+
+  function applyTheme(id) {
+    if (id === "liquid-glass" || id === "true-dark-glass") id = "fluent-glass";
+    var theme = findTheme(id);
+    if (!theme) {
+      id = "true-dark";
+      theme = findTheme(id);
+    }
     document.documentElement.setAttribute("data-theme", id);
-    document.documentElement.removeAttribute("data-glass");
+    // Glass ONLY for True Dark Glass — solid themes stay opaque
+    if (id === "fluent-glass") {
+      document.documentElement.setAttribute("data-glass", "1");
+      setNativeGlass(true, theme && theme.acrylic ? theme.acrylic : { r: 16, g: 20, b: 30, a: 120 });
+    } else {
+      document.documentElement.removeAttribute("data-glass");
+      setNativeGlass(false, null);
+    }
     try { localStorage.setItem(THEME_KEY, id); } catch (e) {}
     state.theme = id;
     renderThemeGrid();
   }
 
   function defaultThemeId() {
-    // Desktop hosts (WinUI / Edge app) get Fluent Glass; pure browser stays True Dark.
     return (window.__ADC_HOST__ === "winui3" || window.__ADC_HOST__ === "edge-app")
       ? "fluent-glass"
       : "true-dark";
@@ -576,110 +731,169 @@
     applyTheme(id);
   }
 
+  function isValidFontId(id) {
+    for (var i = 0; i < UI_FONTS.length; i++) {
+      if (UI_FONTS[i].id === id) return true;
+    }
+    return false;
+  }
+
+  function applyFont(id) {
+    if (!isValidFontId(id)) id = DEFAULT_FONT_ID;
+    document.documentElement.setAttribute("data-font", id);
+    try { localStorage.setItem(FONT_KEY, id); } catch (e) {}
+    state.font = id;
+    renderFontGrid();
+  }
+
+  function loadSavedFont() {
+    var id = DEFAULT_FONT_ID;
+    try { id = localStorage.getItem(FONT_KEY) || DEFAULT_FONT_ID; } catch (e) {}
+    applyFont(id);
+  }
+
+  function renderFontGrid() {
+    var grid = el("font-grid");
+    if (!grid) return;
+    grid.innerHTML = "";
+    for (var i = 0; i < UI_FONTS.length; i++) {
+      var f = UI_FONTS[i];
+      var pill = document.createElement("button");
+      pill.type = "button";
+      pill.className = "font-pill" + (state.font === f.id ? " selected" : "");
+      pill.setAttribute("data-font-id", f.id);
+      pill.setAttribute("role", "option");
+      pill.setAttribute("aria-selected", state.font === f.id ? "true" : "false");
+      pill.setAttribute("aria-label", "Fuente " + f.name);
+      pill.innerHTML =
+        '<span class="font-pill-name"></span>' +
+        '<span class="font-pill-sample"></span>';
+      var nameEl = pill.querySelector(".font-pill-name");
+      nameEl.style.fontFamily = f.stack;
+      nameEl.innerHTML =
+        '<span class="font-pill-check" aria-hidden="true">✓</span>' +
+        '<span class="font-pill-name-text"></span>';
+      nameEl.querySelector(".font-pill-name-text").textContent = f.name;
+      var sample = pill.querySelector(".font-pill-sample");
+      sample.style.fontFamily = f.stack;
+      sample.textContent = f.sample;
+      (function (fontId) {
+        pill.onclick = function () { applyFont(fontId); };
+      })(f.id);
+      grid.appendChild(pill);
+    }
+  }
+
   function renderThemeGrid() {
     var grid = el("theme-grid");
     if (!grid) return;
     grid.innerHTML = "";
     for (var i = 0; i < THEMES.length; i++) {
       var t = THEMES[i];
-      var card = document.createElement("div");
-      card.className = "theme-card" + (state.theme === t.id ? " selected" : "");
-      card.setAttribute("data-theme-id", t.id);
-      card.setAttribute("role", "button");
-      card.setAttribute("tabindex", "0");
-      card.innerHTML =
-        '<div class="theme-swatch" style="background:' + t.swatch + ';color:' + t.swatchText + '">' +
-          '<span class="sample-title" style="color:' + t.accent + '">Juan 3:16</span>' +
-          '<span class="sample-jesus">“Sígueme”</span>' +
-        '</div>' +
-        '<div class="theme-card-body">' +
-          '<h3></h3><p></p>' +
-        '</div>' +
-        '<div class="check">✓ Tema activo</div>';
-      card.querySelector("h3").textContent = t.name;
-      card.querySelector("p").textContent = t.desc;
+      var pill = document.createElement("button");
+      pill.type = "button";
+      pill.className =
+        "theme-pill" +
+        (t.glass ? " theme-pill--glass" : "") +
+        (state.theme === t.id ? " selected" : "");
+      pill.setAttribute("data-theme-id", t.id);
+      pill.setAttribute("role", "option");
+      pill.setAttribute("aria-selected", state.theme === t.id ? "true" : "false");
+      pill.setAttribute("aria-label", "Tema " + t.name);
+      pill.innerHTML =
+        '<span class="theme-pill-dot" aria-hidden="true"></span>' +
+        '<span class="theme-pill-label"></span>' +
+        '<span class="theme-pill-check" aria-hidden="true">✓</span>';
+      var dot = pill.querySelector(".theme-pill-dot");
+      if (!t.glass) {
+        dot.style.background = t.swatch;
+        dot.style.boxShadow = "inset 0 0 0 1px " + t.accent + "55";
+      }
+      pill.querySelector(".theme-pill-label").textContent = t.name;
       (function (themeId) {
-        function activate() { applyTheme(themeId); }
-        card.onclick = function () { activate(); };
-        card.onkeydown = function (ev) {
-          if (ev.key === "Enter" || ev.key === " ") {
-            ev.preventDefault();
-            activate();
-          }
-        };
+        pill.onclick = function () { applyTheme(themeId); };
       })(t.id);
-      grid.appendChild(card);
+      grid.appendChild(pill);
     }
+  }
+
+  /** Classify a string run as Hebrew, Greek, or neither (for Libertinus Serif). */
+  function originalScriptClass(text) {
+    var s = String(text || "");
+    if (/[\u0590-\u05FF\uFB1D-\uFB4F]/.test(s)) return "script-he";
+    if (/[\u0370-\u03FF\u1F00-\u1FFF]/.test(s)) return "script-el";
+    return "";
   }
 
   // Book aliases for detecting refs in study text (longest first when matching)
   var BOOK_ALIAS_LIST = [
-    { n: 1, a: ["genesis", "génesis", "gen", "gn", "gé"] },
-    { n: 2, a: ["exodo", "éxodo", "exo", "ex", "éx"] },
-    { n: 3, a: ["levitico", "levítico", "lev", "lv"] },
-    { n: 4, a: ["numeros", "números", "num", "nm", "núm"] },
-    { n: 5, a: ["deuteronomio", "deut", "dt"] },
-    { n: 6, a: ["josue", "josué", "jos"] },
-    { n: 7, a: ["jueces", "jue", "jdg"] },
-    { n: 8, a: ["rut", "rt", "ruth"] },
-    { n: 9, a: ["1 samuel", "1samuel", "1 sa", "1sa", "1sam", "i samuel"] },
-    { n: 10, a: ["2 samuel", "2samuel", "2 sa", "2sa", "2sam", "ii samuel"] },
-    { n: 11, a: ["1 reyes", "1reyes", "1 re", "1re", "1r", "i reyes"] },
-    { n: 12, a: ["2 reyes", "2reyes", "2 re", "2re", "2r", "ii reyes"] },
-    { n: 13, a: ["1 cronicas", "1 crónicas", "1cronicas", "1cr", "1 cr", "i cronicas"] },
-    { n: 14, a: ["2 cronicas", "2 crónicas", "2cronicas", "2cr", "2 cr", "ii cronicas"] },
-    { n: 15, a: ["esdras", "esd", "ezra"] },
-    { n: 16, a: ["nehemias", "nehemías", "neh"] },
-    { n: 17, a: ["ester", "est", "esther"] },
-    { n: 18, a: ["job"] },
-    { n: 19, a: ["salmos", "salmo", "sal", "sl", "psalm", "psalms", "ps"] },
-    { n: 20, a: ["proverbios", "prov", "pr"] },
-    { n: 21, a: ["eclesiastes", "eclesiastés", "ecl", "ec", "eccl"] },
-    { n: 22, a: ["cantares", "cantar", "cnt", "can", "song"] },
+    // Includes e-Sword / TSK English abbreviations (Joh, 2Ch, Pro, Deu, …)
+    { n: 1, a: ["genesis", "génesis", "gen", "gn", "gé", "ge"] },
+    { n: 2, a: ["exodo", "éxodo", "exo", "ex", "éx", "exod"] },
+    { n: 3, a: ["levitico", "levítico", "lev", "lv", "le"] },
+    { n: 4, a: ["numeros", "números", "num", "nm", "núm", "nu", "numb"] },
+    { n: 5, a: ["deuteronomio", "deut", "dt", "deu", "de"] },
+    { n: 6, a: ["josue", "josué", "jos", "josh"] },
+    { n: 7, a: ["jueces", "jue", "jdg", "judg", "jg"] },
+    { n: 8, a: ["rut", "rt", "ruth", "ru"] },
+    { n: 9, a: ["1 samuel", "1samuel", "1 sa", "1sa", "1sam", "i samuel", "1s"] },
+    { n: 10, a: ["2 samuel", "2samuel", "2 sa", "2sa", "2sam", "ii samuel", "2s"] },
+    { n: 11, a: ["1 reyes", "1reyes", "1 re", "1re", "1r", "i reyes", "1ki", "1kings", "1k"] },
+    { n: 12, a: ["2 reyes", "2reyes", "2 re", "2re", "2r", "ii reyes", "2ki", "2kings", "2k"] },
+    { n: 13, a: ["1 cronicas", "1 crónicas", "1cronicas", "1cr", "1 cr", "i cronicas", "1ch", "1chr", "1chronicles"] },
+    { n: 14, a: ["2 cronicas", "2 crónicas", "2cronicas", "2cr", "2 cr", "ii cronicas", "2ch", "2chr", "2chronicles"] },
+    { n: 15, a: ["esdras", "esd", "ezra", "ezr"] },
+    { n: 16, a: ["nehemias", "nehemías", "neh", "ne"] },
+    { n: 17, a: ["ester", "est", "esther", "es"] },
+    { n: 18, a: ["job", "jb"] },
+    { n: 19, a: ["salmos", "salmo", "sal", "sl", "psalm", "psalms", "ps", "psa", "psm"] },
+    { n: 20, a: ["proverbios", "prov", "pr", "pro", "prv"] },
+    { n: 21, a: ["eclesiastes", "eclesiastés", "ecl", "ec", "eccl", "ecc"] },
+    { n: 22, a: ["cantares", "cantar", "cnt", "can", "song", "sos", "sol", "ss"] },
     { n: 23, a: ["isaias", "isaías", "isa", "is"] },
-    { n: 24, a: ["jeremias", "jeremías", "jer"] },
-    { n: 25, a: ["lamentaciones", "lam"] },
-    { n: 26, a: ["ezequiel", "eze", "ez"] },
-    { n: 27, a: ["daniel", "dan", "dn"] },
-    { n: 28, a: ["oseas", "oseas", "os", "hos"] },
-    { n: 29, a: ["joel", "jl"] },
-    { n: 30, a: ["amos", "amós", "am"] },
-    { n: 31, a: ["abdias", "abdías", "abd"] },
-    { n: 32, a: ["jonas", "jonás", "jon"] },
-    { n: 33, a: ["miqueas", "miq", "mic"] },
-    { n: 34, a: ["nahum", "nahúm", "nah"] },
-    { n: 35, a: ["habacuc", "hab"] },
-    { n: 36, a: ["sofonias", "sofonías", "sof"] },
-    { n: 37, a: ["hageo", "hag"] },
-    { n: 38, a: ["zacarias", "zacarías", "zac"] },
-    { n: 39, a: ["malaquias", "malaquías", "mal"] },
-    { n: 40, a: ["mateo", "mat", "mt"] },
-    { n: 41, a: ["marcos", "mar", "mc", "mk"] },
-    { n: 42, a: ["lucas", "luc", "lc", "lk"] },
-    { n: 43, a: ["juan", "jua", "jn", "john"] },
-    { n: 44, a: ["hechos", "hech", "hch", "acts", "act"] },
-    { n: 45, a: ["romanos", "rom", "ro", "rm"] },
-    { n: 46, a: ["1 corintios", "1corintios", "1 co", "1co", "1cor", "i corintios"] },
-    { n: 47, a: ["2 corintios", "2corintios", "2 co", "2co", "2cor", "ii corintios"] },
+    { n: 24, a: ["jeremias", "jeremías", "jer", "je"] },
+    { n: 25, a: ["lamentaciones", "lam", "la"] },
+    { n: 26, a: ["ezequiel", "eze", "ez", "ezeq", "ezek"] },
+    { n: 27, a: ["daniel", "dan", "dn", "da"] },
+    { n: 28, a: ["oseas", "oseas", "os", "hos", "ho"] },
+    { n: 29, a: ["joel", "jl", "joe"] },
+    { n: 30, a: ["amos", "amós", "am", "amo"] },
+    { n: 31, a: ["abdias", "abdías", "abd", "obad", "oba", "ob"] },
+    { n: 32, a: ["jonas", "jonás", "jon", "jnh"] },
+    { n: 33, a: ["miqueas", "miq", "mic", "mi"] },
+    { n: 34, a: ["nahum", "nahúm", "nah", "na"] },
+    { n: 35, a: ["habacuc", "hab", "hb"] },
+    { n: 36, a: ["sofonias", "sofonías", "sof", "zep", "zeph", "zp"] },
+    { n: 37, a: ["hageo", "hag", "hg"] },
+    { n: 38, a: ["zacarias", "zacarías", "zac", "zec", "zech", "zc"] },
+    { n: 39, a: ["malaquias", "malaquías", "mal", "ml"] },
+    { n: 40, a: ["mateo", "mat", "mt", "matt"] },
+    { n: 41, a: ["marcos", "mar", "mc", "mk", "mr", "mark"] },
+    { n: 42, a: ["lucas", "luc", "lc", "lk", "lu", "luke"] },
+    { n: 43, a: ["juan", "jua", "jn", "john", "joh", "jo"] },
+    { n: 44, a: ["hechos", "hech", "hch", "acts", "act", "ac"] },
+    { n: 45, a: ["romanos", "rom", "ro", "rm", "romans"] },
+    { n: 46, a: ["1 corintios", "1corintios", "1 co", "1co", "1cor", "i corintios", "1c"] },
+    { n: 47, a: ["2 corintios", "2corintios", "2 co", "2co", "2cor", "ii corintios", "2c"] },
     { n: 48, a: ["galatas", "gálatas", "gal", "ga"] },
-    { n: 49, a: ["efesios", "efe", "ef"] },
-    { n: 50, a: ["filipenses", "fil", "php"] },
-    { n: 51, a: ["colosenses", "col"] },
-    { n: 52, a: ["1 tesalonicenses", "1tesalonicenses", "1 ts", "1ts", "1tes"] },
-    { n: 53, a: ["2 tesalonicenses", "2tesalonicenses", "2 ts", "2ts", "2tes"] },
-    { n: 54, a: ["1 timoteo", "1timoteo", "1 ti", "1ti", "1tim"] },
-    { n: 55, a: ["2 timoteo", "2timoteo", "2 ti", "2ti", "2tim"] },
-    { n: 56, a: ["tito", "tit"] },
-    { n: 57, a: ["filemon", "filemón", "flm", "flmón"] },
-    { n: 58, a: ["hebreos", "heb", "he"] },
-    { n: 59, a: ["santiago", "stg", "sant", "james"] },
-    { n: 60, a: ["1 pedro", "1pedro", "1 pe", "1pe", "1ped"] },
-    { n: 61, a: ["2 pedro", "2pedro", "2 pe", "2pe", "2ped"] },
-    { n: 62, a: ["1 juan", "1juan", "1 jn", "1jn", "1jua"] },
-    { n: 63, a: ["2 juan", "2juan", "2 jn", "2jn"] },
-    { n: 64, a: ["3 juan", "3juan", "3 jn", "3jn"] },
-    { n: 65, a: ["judas", "jud", "jude"] },
-    { n: 66, a: ["apocalipsis", "apoc", "ap", "rev", "revelation"] }
+    { n: 49, a: ["efesios", "efe", "ef", "eph", "ep"] },
+    { n: 50, a: ["filipenses", "fil", "php", "phil", "phi", "pp"] },
+    { n: 51, a: ["colosenses", "col", "co"] },
+    { n: 52, a: ["1 tesalonicenses", "1tesalonicenses", "1 ts", "1ts", "1tes", "1th", "1thess"] },
+    { n: 53, a: ["2 tesalonicenses", "2tesalonicenses", "2 ts", "2ts", "2tes", "2th", "2thess"] },
+    { n: 54, a: ["1 timoteo", "1timoteo", "1 ti", "1ti", "1tim", "1tm"] },
+    { n: 55, a: ["2 timoteo", "2timoteo", "2 ti", "2ti", "2tim", "2tm"] },
+    { n: 56, a: ["tito", "tit", "ti"] },
+    { n: 57, a: ["filemon", "filemón", "flm", "flmón", "phm", "philem"] },
+    { n: 58, a: ["hebreos", "heb", "he", "hebrews"] },
+    { n: 59, a: ["santiago", "stg", "sant", "james", "jam", "jas", "ja"] },
+    { n: 60, a: ["1 pedro", "1pedro", "1 pe", "1pe", "1ped", "1pet", "1pt"] },
+    { n: 61, a: ["2 pedro", "2pedro", "2 pe", "2pe", "2ped", "2pet", "2pt"] },
+    { n: 62, a: ["1 juan", "1juan", "1 jn", "1jn", "1jua", "1jo", "1joh", "1john"] },
+    { n: 63, a: ["2 juan", "2juan", "2 jn", "2jn", "2jo", "2joh", "2john"] },
+    { n: 64, a: ["3 juan", "3juan", "3 jn", "3jn", "3jo", "3joh", "3john"] },
+    { n: 65, a: ["judas", "jud", "jude", "jde"] },
+    { n: 66, a: ["apocalipsis", "apoc", "ap", "rev", "revelation", "re"] }
   ];
 
   var chapterCache = {}; // key: biblePath|book|chapter -> { verses, title, translation }
@@ -973,6 +1187,258 @@
     if (modal) modal.classList.remove("open");
   }
 
+  /* ---------- Cross-references (verse TSK + word concordance) ---------- */
+  var xrefState = {
+    mode: "verse", // 'verse' | 'word'
+    loading: false
+  };
+
+  /** Score commentary modules for cross-ref usefulness (TSKe / TSK / RV refs first). */
+  function xrefModuleScore(mod) {
+    if (!mod) return -1;
+    var h = ((mod.title || "") + " " + (mod.abbreviation || "") + " " + (mod.filename || "")).toLowerCase();
+    if (mod.encrypted) return -1;
+    var score = 0;
+    if (h.indexOf("tske") >= 0) score += 100;
+    else if (/\btsk\b/.test(h) || h.indexOf("treasury") >= 0 || h.indexOf("scriptural knowledge") >= 0) score += 90;
+    if (h.indexOf("referencias") >= 0 && (h.indexOf("1960") >= 0 || h.indexOf("reina") >= 0)) score += 70;
+    if (h.indexOf("rv1960x") >= 0 || (h.indexOf("rv1960") >= 0 && h.indexOf("refer") >= 0)) score += 55;
+    if (h.indexOf("cross") >= 0 || h.indexOf("paralela") >= 0) score += 40;
+    if (h.indexOf("refer") >= 0) score += 25;
+    return score;
+  }
+
+  function listXrefModules() {
+    var list = (state.commentaries || []).slice();
+    list.sort(function (a, b) {
+      return xrefModuleScore(b) - xrefModuleScore(a);
+    });
+    // Prefer modules that look like xref sources; if none score, still show all commentaries
+    var preferred = list.filter(function (m) { return xrefModuleScore(m) > 0; });
+    return preferred.length ? preferred : list;
+  }
+
+  function fillXrefModuleSelect() {
+    var sel = el("sel-xref-mod");
+    if (!sel) return;
+    var mods = listXrefModules();
+    var keep = sel.value;
+    sel.innerHTML = "";
+    if (!mods.length) {
+      var o = document.createElement("option");
+      o.value = "";
+      o.textContent = "— Sin módulos de referencias —";
+      sel.appendChild(o);
+      return;
+    }
+    for (var i = 0; i < mods.length; i++) {
+      var m = mods[i];
+      var opt = document.createElement("option");
+      opt.value = m.path;
+      var label = m.abbreviation || m.filename || "Módulo";
+      if (m.title) label += " — " + m.title;
+      opt.textContent = label;
+      sel.appendChild(opt);
+    }
+    if (keep && mods.some(function (m) { return m.path === keep; })) {
+      sel.value = keep;
+    } else {
+      sel.value = mods[0].path;
+    }
+  }
+
+  function setXrefMode(mode) {
+    xrefState.mode = mode === "word" ? "word" : "verse";
+    var modes = document.querySelectorAll("[data-xref-mode]");
+    for (var i = 0; i < modes.length; i++) {
+      var on = modes[i].getAttribute("data-xref-mode") === xrefState.mode;
+      if (on) modes[i].classList.add("active");
+      else modes[i].classList.remove("active");
+      modes[i].setAttribute("aria-selected", on ? "true" : "false");
+    }
+    var tool = el("xref-toolbar-verse");
+    if (tool) tool.style.display = xrefState.mode === "verse" ? "" : "none";
+    loadXrefResults();
+  }
+
+  function openXrefModal(preferredMode) {
+    if (state.selectedVerse == null && !state.selectedWord) return;
+    // Smart default: word selection → word mode; verse only → verse mode
+    var mode = preferredMode;
+    if (!mode) {
+      mode = state.selectedWord ? "word" : "verse";
+    }
+    // If user picks word mode without a word, fall back to verse
+    if (mode === "word" && !state.selectedWord) mode = "verse";
+    // If verse mode without verse, need at least a word
+    if (mode === "verse" && state.selectedVerse == null && state.selectedWord) mode = "word";
+    fillXrefModuleSelect();
+    var modal = el("xref-modal");
+    if (!modal) return;
+    modal.classList.add("open");
+    setXrefMode(mode);
+  }
+
+  function closeXrefModal() {
+    var modal = el("xref-modal");
+    if (modal) modal.classList.remove("open");
+  }
+
+  function xrefQueryLabel() {
+    var bm = bookMeta();
+    var ref =
+      bm.name + " " + state.chapter +
+      (state.selectedVerse != null ? ":" + state.selectedVerse : "");
+    if (state.selectedWord) {
+      return "«" + state.selectedWord + "» · " + ref;
+    }
+    return ref;
+  }
+
+  function loadXrefResults() {
+    var box = el("xref-list");
+    var sub = el("xref-sub");
+    if (!box) return;
+    var label = xrefQueryLabel();
+    if (sub) sub.textContent = label + " · modo " + (xrefState.mode === "word" ? "palabra" : "versículo");
+
+    if (xrefState.mode === "word") {
+      loadXrefWordResults(box, sub);
+    } else {
+      loadXrefVerseResults(box, sub);
+    }
+  }
+
+  function loadXrefVerseResults(box, sub) {
+    if (state.selectedVerse == null) {
+      box.innerHTML = '<div class="xref-empty">Selecciona un versículo en Biblia para ver referencias TSK.</div>';
+      return;
+    }
+    var path = el("sel-xref-mod") ? el("sel-xref-mod").value : "";
+    if (!path) {
+      box.innerHTML =
+        '<div class="xref-empty">No hay módulos de referencias (TSK / Referencias RV). ' +
+        "Instalá <b>tsk.cmti</b>, <b>tske_v12.cmti</b> o <b>referencias_para_la_reina_valera_1960.cmti</b> en e-Sword.</div>";
+      return;
+    }
+    var mod = null;
+    for (var i = 0; i < (state.commentaries || []).length; i++) {
+      if (state.commentaries[i].path === path) { mod = state.commentaries[i]; break; }
+    }
+    box.innerHTML = '<div class="xref-empty">Cargando referencias…</div>';
+    xrefState.loading = true;
+    invoke("get_verse_commentaries", {
+      modulePath: path,
+      bookNumber: state.bookNumber,
+      chapter: state.chapter,
+      verse: state.selectedVerse,
+      includeVerse: true,
+      includeChapter: false,
+      includeBook: false
+    }).then(function (rows) {
+      xrefState.loading = false;
+      rows = rows || [];
+      if (!rows.length) {
+        box.innerHTML =
+          '<div class="xref-empty">Sin referencias para este versículo en ' +
+          escapeHtml((mod && (mod.abbreviation || mod.filename)) || "el módulo") +
+          ".</div>";
+        return;
+      }
+      if (sub) {
+        sub.textContent =
+          xrefQueryLabel() + " · " +
+          ((mod && (mod.abbreviation || mod.filename)) || "TSK") +
+          " · " + rows.length + " bloque(s) · clic en una cita para vista rápida";
+      }
+      var html = "";
+      for (var r = 0; r < rows.length; r++) {
+        var row = rows[r];
+        var title = row.title || row.reference || row.level || "Referencias";
+        html +=
+          '<div class="xref-group">' +
+          "<h4>" + escapeHtml(title) +
+          (row.source ? ' <span style="font-weight:500;color:var(--muted)">· ' +
+            escapeHtml(row.source) + "</span>" : "") +
+          "</h4>" +
+          '<div class="xref-body">' + formatRichText(row.text || "") + "</div>" +
+          "</div>";
+      }
+      box.innerHTML = html;
+    }).catch(function (e) {
+      xrefState.loading = false;
+      box.innerHTML =
+        '<div class="xref-empty">Error: ' + escapeHtml(String(e.message || e)) + "</div>";
+    });
+  }
+
+  function loadXrefWordResults(box, sub) {
+    var word = state.selectedWord;
+    if (!word) {
+      box.innerHTML =
+        '<div class="xref-empty">Clic en una <b>palabra</b> del versículo para buscar otras ocurrencias en la Biblia actual.</div>';
+      return;
+    }
+    if (!state.bible) {
+      box.innerHTML = '<div class="xref-empty">Elige una Biblia en la pestaña Biblia.</div>';
+      return;
+    }
+    box.innerHTML = '<div class="xref-empty">Buscando «' + escapeHtml(word) + "» en la Biblia…</div>";
+    xrefState.loading = true;
+    invoke("search_bible_word", {
+      modulePath: state.bible.path,
+      term: word,
+      excludeBook: state.bookNumber,
+      excludeChapter: state.chapter,
+      excludeVerse: state.selectedVerse != null ? state.selectedVerse : undefined,
+      limit: 50
+    }).then(function (hits) {
+      xrefState.loading = false;
+      hits = hits || [];
+      if (sub) {
+        sub.textContent =
+          "«" + word + "» · " +
+          (state.bible.abbreviation || state.bible.filename) +
+          " · " + hits.length + " ocurrencia(s) · clic para ir al pasaje";
+      }
+      if (!hits.length) {
+        box.innerHTML =
+          '<div class="xref-empty">No se encontraron otras ocurrencias de «' +
+          escapeHtml(word) + "» (palabra completa) en esta Biblia.</div>";
+        return;
+      }
+      box.innerHTML = "";
+      for (var i = 0; i < hits.length; i++) {
+        var h = hits[i];
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "xref-hit";
+        var refLabel =
+          (h.book || bookDisplayName(h.bookNumber)) +
+          " " + h.chapter + ":" + h.verse;
+        btn.innerHTML =
+          '<span class="xref-ref">' + escapeHtml(refLabel) + "</span>" +
+          '<span class="xref-snip">' + escapeHtml(h.snippet || "") + "</span>";
+        (function (hit) {
+          btn.onclick = function () {
+            closeXrefModal();
+            goToHistoryEntry({
+              bookNumber: hit.bookNumber,
+              chapter: hit.chapter,
+              verse: hit.verse,
+              biblePath: state.bible ? state.bible.path : ""
+            });
+          };
+        })(h);
+        box.appendChild(btn);
+      }
+    }).catch(function (e) {
+      xrefState.loading = false;
+      box.innerHTML =
+        '<div class="xref-empty">Error: ' + escapeHtml(String(e.message || e)) + "</div>";
+    });
+  }
+
   function renderHistoryList() {
     var box = el("history-list");
     if (!box) return;
@@ -1163,14 +1629,14 @@
       });
     }
 
-    // Hebrew (incl. presentation forms)
+    // Hebrew (incl. presentation forms) — Libertinus via .script-he
     var reHe = /[\u0590-\u05FF\uFB1D-\uFB4F]{1,}/g;
     while ((m = reHe.exec(raw)) !== null) {
       matches.push({
         start: m.index,
         end: m.index + m[0].length,
         html:
-          '<span class="lemmaref study-ref" tabindex="0" role="link"' +
+          '<span class="lemmaref study-ref script-he" tabindex="0" role="link"' +
           ' data-kind="lemma"' +
           ' data-lang="he"' +
           ' data-term="' + escapeHtml(m[0]) + '"' +
@@ -1181,14 +1647,14 @@
       });
     }
 
-    // Greek (basic + extended)
+    // Greek (basic + extended) — Libertinus via .script-el
     var reEl = /[\u0370-\u03FF\u1F00-\u1FFF]{2,}/g;
     while ((m = reEl.exec(raw)) !== null) {
       matches.push({
         start: m.index,
         end: m.index + m[0].length,
         html:
-          '<span class="lemmaref study-ref" tabindex="0" role="link"' +
+          '<span class="lemmaref study-ref script-el" tabindex="0" role="link"' +
           ' data-kind="lemma"' +
           ' data-lang="el"' +
           ' data-term="' + escapeHtml(m[0]) + '"' +
@@ -1713,6 +2179,8 @@
           var w = document.createElement("span");
           w.className = "word";
           w.textContent = part.text;
+          if (part.script === "he") w.classList.add("script-he");
+          else if (part.script === "el") w.classList.add("script-el");
           var markStyle = getWordMarkStyle(verseNum, thisIdx);
           if (markStyle) w.classList.add("mark-" + markStyle);
           if (getWordUnderline(verseNum, thisIdx)) w.classList.add("mark-ul");
@@ -2223,7 +2691,10 @@
       '<div class="lemma-original"></div>' +
       '<div class="lemma-spanish"><span class="lbl">ES</span><span class="es-val"></span></div>' +
       '<div class="lemma-meta"></div>';
-    wrap.querySelector(".lemma-original").textContent = origLine;
+    var origEl = wrap.querySelector(".lemma-original");
+    origEl.textContent = origLine;
+    var sc = originalScriptClass(origLine);
+    if (sc) origEl.classList.add(sc);
     wrap.querySelector(".es-val").textContent = esLine;
     var metaBits = [];
     if (ctx.strong) metaBits.push("<code>" + escapeHtml(ctx.strong) + "</code>");
@@ -2290,7 +2761,9 @@
       return;
     }
 
-    var paths = items.map(function (m) { return m.path; });
+    // Cap probes — hundreds of commentary modules after import can freeze the UI/native host
+    var MAX_PROBE = 48;
+    var paths = items.map(function (m) { return m.path; }).slice(0, MAX_PROBE);
     var probeId = (state._probeSeq = (state._probeSeq || 0) + 1);
     // Debounce probes
     if (state._probeTimer) clearTimeout(state._probeTimer);
@@ -2527,13 +3000,16 @@
   }
 
   function tokenizeWords(text) {
-    // Keep punctuation attached loosely; clickable tokens = sequences of letters/digits incl. accents
+    // Latin words, Hebrew runs, Greek runs; punctuation/spaces as "other"
     var parts = [];
-    var re = /([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+)|([^A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+)/g;
+    var re =
+      /([\u0590-\u05FF\uFB1D-\uFB4F]+)|([\u0370-\u03FF\u1F00-\u1FFF]+)|([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+)|([^\u0590-\u05FF\uFB1D-\uFB4F\u0370-\u03FF\u1F00-\u1FFFA-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]+)/g;
     var m;
     while ((m = re.exec(text)) !== null) {
-      if (m[1]) parts.push({ type: "word", text: m[1] });
-      else if (m[2]) parts.push({ type: "other", text: m[2] });
+      if (m[1]) parts.push({ type: "word", text: m[1], script: "he" });
+      else if (m[2]) parts.push({ type: "word", text: m[2], script: "el" });
+      else if (m[3]) parts.push({ type: "word", text: m[3], script: "" });
+      else if (m[4]) parts.push({ type: "other", text: m[4] });
     }
     return parts;
   }
@@ -2546,6 +3022,10 @@
     el("btn-to-dict").disabled = !state.selectedWord && state.selectedVerse == null;
     el("btn-to-lex").disabled = !state.selectedWord;
     el("btn-to-cmt").disabled = !state.selectedWord && state.selectedVerse == null;
+    var xrefDisabled = !state.selectedWord && state.selectedVerse == null;
+    if (el("btn-to-xref")) el("btn-to-xref").disabled = xrefDisabled;
+    if (el("btn-xref-toolbar")) el("btn-xref-toolbar").disabled = xrefDisabled;
+    if (el("btn-eink")) el("btn-eink").disabled = state.selectedVerse == null;
 
     if (state.selectedWord) {
       chip.className = "chip";
@@ -2597,6 +3077,9 @@
     saveNavPosition();
     // Always re-probe ● indicators for the new verse when on a study tab
     if (state.tab !== "biblia" && state.tab !== "temas") refreshModuleDropdown();
+    if (el("eink-modal") && el("eink-modal").classList.contains("open")) {
+      refreshEinkPreview();
+    }
     if (scroll) {
       var node = document.querySelector('.verse[data-verse="' + verseNum + '"]');
       if (node) node.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -3047,6 +3530,7 @@
       modbar.classList.remove("show");
       wrap.style.display = "none";
       renderThemeGrid();
+      renderFontGrid();
       return;
     }
 
@@ -3892,7 +4376,75 @@
         goToStudyTab("comentario");
       };
     }
+    function wireXrefOpen(btn) {
+      if (!btn) return;
+      btn.onclick = function () {
+        if (state.selectedVerse == null && !state.selectedWord) {
+          // Soft nudge: select current first verse if chapter is loaded
+          if (state.verses && state.verses.length) {
+            selectVerse(state.verses[0].verse, false);
+          } else {
+            return;
+          }
+        }
+        openXrefModal();
+      };
+    }
+    wireXrefOpen(el("btn-to-xref"));
+    wireXrefOpen(el("btn-xref-toolbar"));
     if (el("btn-clear-sel")) el("btn-clear-sel").onclick = clearSelection;
+
+    // In-app e-ink preview (board mock only)
+    if (el("btn-eink")) {
+      el("btn-eink").onclick = function () {
+        openEinkPreview();
+      };
+    }
+    if (el("eink-modal-close")) {
+      el("eink-modal-close").onclick = closeEinkPreview;
+    }
+    if (el("eink-modal")) {
+      el("eink-modal").onclick = function (ev) {
+        if (ev.target === el("eink-modal")) closeEinkPreview();
+      };
+    }
+    if (el("eink-copy")) {
+      el("eink-copy").onclick = function () {
+        var p = einkPayload();
+        if (!p.body) return;
+        copyTextToClipboard(p.text).catch(function () {});
+      };
+    }
+    var einkSizeBtns = document.querySelectorAll("[data-eink-size]");
+    for (var es = 0; es < einkSizeBtns.length; es++) {
+      (function (btn) {
+        btn.onclick = function () {
+          setEinkSize(btn.getAttribute("data-eink-size"));
+        };
+      })(einkSizeBtns[es]);
+    }
+
+    // Cross-ref modal wiring
+    if (el("xref-modal-close")) {
+      el("xref-modal-close").onclick = closeXrefModal;
+    }
+    if (el("xref-modal")) {
+      el("xref-modal").onclick = function (ev) {
+        if (ev.target === el("xref-modal")) closeXrefModal();
+      };
+    }
+    ["xref-mode-verse", "xref-mode-word"].forEach(function (id) {
+      var btn = el(id);
+      if (!btn) return;
+      btn.onclick = function () {
+        setXrefMode(btn.getAttribute("data-xref-mode"));
+      };
+    });
+    if (el("sel-xref-mod")) {
+      el("sel-xref-mod").onchange = function () {
+        if (xrefState.mode === "verse") loadXrefResults();
+      };
+    }
 
     // Commentary level filters (verse / chapter / book isolation)
     function onCmtLevelChange() {
@@ -3970,6 +4522,11 @@
           }).catch(function () { closeCtxMenu(); });
           return;
         }
+        if (action === "eink") {
+          closeCtxMenu();
+          openEinkPreview();
+          return;
+        }
         if (action === "underline") {
           toggleUnderline();
           closeCtxMenu();
@@ -3978,6 +4535,11 @@
         if (action === "clear-marks") {
           clearAllMarksOnSelection();
           closeCtxMenu();
+          return;
+        }
+        if (action === "xref") {
+          closeCtxMenu();
+          openXrefModal();
           return;
         }
       });
@@ -4009,6 +4571,8 @@
         closeCtxMenu();
         closeVerseModal();
         closeHistoryModal();
+        closeXrefModal();
+        closeEinkPreview();
         closeRefPanel();
         hideRefTooltip();
       }
@@ -4020,11 +4584,13 @@
     if (window.__ADC_FULL_WIRED__ || window.__ADC_START_RUNNING__) return;
     window.__ADC_BOOT_STARTED__ = true;
     var host = window.__ADC_HOST__ || "";
+    if (!host && getTauriInvoke()) host = "tauri";
     var hostHint =
+      host === "tauri" ? "Conectando con Tauri (IPC)…" :
       host === "winui3" ? "Conectando con WinUI 3 + adc-api…" :
       host === "edge-app" ? "Conectando con shell estable…" :
       getApiBase() ? "Conectando con adc-api…" :
-      "Buscando API…";
+      "Buscando API (Tauri o adc-api)…";
     setBoot(hostHint);
 
     var tries = 0;
@@ -4036,12 +4602,12 @@
       if (!getInvoke()) {
         if (tries >= maxTries) {
           setBoot(
-            "Sin API. Ejecutá Start-ADC-Stable.bat",
+            "Sin API. Ejecutá: Start-ADC-Native.bat  (Tauri nativo)",
             true
           );
           return;
         }
-        setBoot("Esperando adc-api… (" + tries + "/" + maxTries + ")");
+        setBoot("Esperando host… (" + tries + "/" + maxTries + ")");
         setTimeout(attempt, 250);
         return;
       }
@@ -4050,8 +4616,10 @@
         if (!ok) {
           if (tries >= maxTries) {
             setBoot(
-              "adc-api no responde en " + (getApiBase() || "127.0.0.1:17865") +
-              ". Ejecutá Start-ADC-Stable.bat",
+              getTauriInvoke()
+                ? "Tauri IPC no respondió. Reiniciá con Start-ADC-Native.bat."
+                : ("adc-api no responde en " + (getApiBase() || "127.0.0.1:17865") +
+                  ". Preferí Start-ADC-Native.bat; fallback: Start-ADC-Stable.bat"),
               true
             );
             return;
@@ -4201,6 +4769,7 @@
         loadCmtLevelPrefs();
         wireEvents();
         loadSavedTheme();
+        loadSavedFont();
         var view = state.bibleView;
         state.bibleView = "single";
         setBibleView(view === "parallel" ? "parallel" : "single");
@@ -4209,9 +4778,11 @@
         updateFooter();
         updateSelectionUI();
         loadChapter();
-        document.title = "Asignación del Cielo Bible";
+        document.title = "Espada 3.7 (Windows)";
         window.__ADC_FULL_WIRED__ = true;
         window.__ADC_START_RUNNING__ = false;
+        // Acrylic only after UI is live (avoids compositor crash during module scan)
+        try { markGlassBootReady(); } catch (ge) { console.warn(ge); }
       } catch (err) {
         console.error(err);
         window.__ADC_START_RUNNING__ = false;
@@ -4232,26 +4803,49 @@
 
   // Apply theme ASAP (even on boot screen)
   try {
-    var earlyDefault = (window.__ADC_HOST__ === "winui3" || window.__ADC_HOST__ === "edge-app")
-      ? "fluent-glass"
-      : "true-dark";
+    var earlyDefault = defaultThemeId();
     var early = localStorage.getItem(THEME_KEY) || earlyDefault;
-    // Removed themes fall back to default for this host
-    if (early === "liquid-glass") early = earlyDefault;
-    document.documentElement.setAttribute("data-theme", early);
-    document.documentElement.removeAttribute("data-glass");
+    if (early === "liquid-glass" || early === "true-dark-glass") early = "fluent-glass";
+    applyTheme(early);
   } catch (e) {}
+
+  // Apply UI font ASAP (Hebrew/Greek stay Libertinus via CSS)
+  try {
+    var earlyFont = localStorage.getItem(FONT_KEY) || DEFAULT_FONT_ID;
+    if (
+      earlyFont !== "google-sans-flex" &&
+      earlyFont !== "roboto" &&
+      earlyFont !== "inter" &&
+      earlyFont !== "roboto-flex"
+    ) {
+      earlyFont = DEFAULT_FONT_ID;
+    }
+    document.documentElement.setAttribute("data-font", earlyFont);
+  } catch (e) {
+    try { document.documentElement.setAttribute("data-font", "google-sans-flex"); } catch (e2) {}
+  }
 
   // Show host chip on desktop shells
   try {
-    if (window.__ADC_HOST__ === "winui3" || window.__ADC_HOST__ === "edge-app") {
+    if (!window.__ADC_HOST__ && getTauriInvoke()) window.__ADC_HOST__ = "tauri";
+    if (
+      window.__ADC_HOST__ === "winui3" ||
+      window.__ADC_HOST__ === "edge-app" ||
+      window.__ADC_HOST__ === "tauri"
+    ) {
       var chip = document.getElementById("host-chip");
       if (chip) {
         chip.classList.add("show");
-        chip.textContent = window.__ADC_HOST__ === "edge-app" ? "Stable" : "Fluent";
-        chip.title = window.__ADC_HOST__ === "edge-app"
-          ? "Shell estable (Edge app + adc-api)"
-          : "Corriendo en WinUI 3";
+        if (window.__ADC_HOST__ === "tauri") {
+          chip.textContent = "Windows";
+          chip.title = "Espada 3.7 for Windows · Tauri (IPC local)";
+        } else if (window.__ADC_HOST__ === "edge-app") {
+          chip.textContent = "Windows";
+          chip.title = "Espada 3.7 for Windows · shell estable (Edge + adc-api)";
+        } else {
+          chip.textContent = "Windows";
+          chip.title = "Espada 3.7 for Windows · WinUI 3";
+        }
       }
     }
   } catch (e) {}

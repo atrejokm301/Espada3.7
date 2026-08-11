@@ -1,7 +1,11 @@
 @echo off
+REM FALLBACK shell only (Edge app + adc-api). Prefer Start-ADC-Native.bat for native Tauri.
 setlocal
-title Asignacion del Cielo - Stable
+title Espada 3.7 Windows - Stable fallback (Edge)
 cd /d "%~dp0"
+echo NOTE: Primary product path is Start-ADC-Native.bat (Tauri).
+echo This Edge + adc-api launcher is a fallback for debugging.
+echo.
 
 set "API=%~dp0src-tauri\target\debug\adc-api.exe"
 set "UI=%~dp0ui"

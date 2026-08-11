@@ -1,3 +1,4 @@
+using System.Threading;
 using AsignacionDelCielo_WinUI.Services;
 using Microsoft.UI.Xaml;
 
@@ -6,12 +7,16 @@ namespace AsignacionDelCielo_WinUI;
 public partial class App : Application
 {
     private Window? _window;
+    private static Mutex? _singleInstance;
 
     /// <summary>Process-lifetime API host (survives page navigations).</summary>
     public static ApiHost? SharedApi { get; set; }
 
     public App()
     {
+        // Log before anything else — WER crashes often had no log line.
+        CrashLog.Write("App ctor begin");
+
         // Catch managed crashes so we get a log instead of a silent death.
         UnhandledException += (_, e) =>
         {
@@ -30,12 +35,39 @@ public partial class App : Application
             e.SetObserved();
         };
 
-        InitializeComponent();
-        CrashLog.Write("App starting");
+        try
+        {
+            InitializeComponent();
+            CrashLog.Write("App starting (InitializeComponent ok)");
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("InitializeComponent failed", ex);
+            throw;
+        }
     }
 
     protected override async void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        // Second instance often crashes on WebView2 profile lock — exit cleanly.
+        const string mutexName = "Local\\AsignacionDelCielo.WinUI.SingleInstance";
+        try
+        {
+            _singleInstance = new Mutex(initiallyOwned: true, name: mutexName, createdNew: out var created);
+            if (!created)
+            {
+                CrashLog.Write("Second instance detected — exiting without crash");
+                _singleInstance.Dispose();
+                _singleInstance = null;
+                Environment.Exit(0);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("Single-instance mutex failed (continuing)", ex);
+        }
+
         try
         {
             SharedApi = new ApiHost();
@@ -48,20 +80,39 @@ public partial class App : Application
             // Still open the window so the user sees the error overlay.
         }
 
-        _window = new MainWindow();
-        _window.Closed += (_, _) =>
+        try
         {
-            CrashLog.Write("MainWindow closed");
-            try
+            _window = new MainWindow();
+            _window.Closed += (_, _) =>
             {
-                SharedApi?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                CrashLog.Write("SharedApi dispose failed", ex);
-            }
-            SharedApi = null;
-        };
-        _window.Activate();
+                CrashLog.Write("MainWindow closed");
+                try
+                {
+                    SharedApi?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    CrashLog.Write("SharedApi dispose failed", ex);
+                }
+                SharedApi = null;
+                try
+                {
+                    _singleInstance?.ReleaseMutex();
+                    _singleInstance?.Dispose();
+                }
+                catch
+                {
+                    // ignore
+                }
+                _singleInstance = null;
+            };
+            _window.Activate();
+            CrashLog.Write("MainWindow activated");
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Write("MainWindow create/activate failed", ex);
+            throw;
+        }
     }
 }

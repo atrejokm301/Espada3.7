@@ -4,7 +4,7 @@
 use crate::esword::{
     get_chapter, get_commentaries, list_books, list_dictionary_topics, lookup_dictionary,
     lookup_lexicon, probe_commentary, probe_dictionary, probe_lexicon, resolve_word_strongs,
-    scan_modules, search_commentaries, ContentProbe, DEFAULT_ESWORD_PATH,
+    scan_modules, search_bible_word, search_commentaries, ContentProbe, DEFAULT_ESWORD_PATH,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -98,12 +98,12 @@ pub fn dispatch(cmd: &str, args: &Value) -> Result<Value, String> {
     match cmd {
         "app_info" => {
             let info = AppInfo {
-                name: "Asignación del Cielo Bible".into(),
+                name: "Espada 3.7".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 offline: true,
-                mode: "e-sword-local".into(),
+                mode: "e-sword-local-windows".into(),
                 esword_path: DEFAULT_ESWORD_PATH.into(),
-                host: "winui3-api".into(),
+                host: "windows".into(),
             };
             serde_json::to_value(info).map_err(|e| e.to_string())
         }
@@ -170,6 +170,24 @@ pub fn dispatch(cmd: &str, args: &Value) -> Result<Value, String> {
             let term = arg_str(args, "term").ok_or_else(|| "term required".to_string())?;
             let limit = arg_i32(args, "limit").unwrap_or(30);
             let res = search_commentaries(&module_path, &term, limit)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "search_bible_word" => {
+            let module_path = arg_str(args, "modulePath")
+                .ok_or_else(|| "modulePath required".to_string())?;
+            let term = arg_str(args, "term").ok_or_else(|| "term required".to_string())?;
+            let exclude_book = arg_i32(args, "excludeBook");
+            let exclude_chapter = arg_i32(args, "excludeChapter");
+            let exclude_verse = arg_i32(args, "excludeVerse");
+            let limit = arg_i32(args, "limit").unwrap_or(40);
+            let res = search_bible_word(
+                &module_path,
+                &term,
+                exclude_book,
+                exclude_chapter,
+                exclude_verse,
+                limit,
+            )?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "suggest_dictionary_topics" => {

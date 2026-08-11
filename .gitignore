@@ -51,3 +51,8 @@ _pkginfo.txt
 # OS
 Thumbs.db
 Desktop.ini
+
+# Python
+scripts/__pycache__/
+*.pyc
+

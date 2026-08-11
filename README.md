@@ -1,15 +1,61 @@
-# Asignación del Cielo Bible
+# Espada 3.7 — Windows
 
-App de estudio bíblico **offline** (Tauri 2 + UI vanilla en `ui/index.html`).
+App de estudio bíblico **nativa y offline for Windows** (Tauri 2 + UI en `ui/`).
+
+> Product name: **Espada 3.7** · Platform: **Windows** · Branch: **`windows`**  
+> Internal crate (for now): `asignacion-del-cielo-bible`
+
+## Multi-platform layout (this repo)
+
+| Branch | Platform | Stack |
+|--------|----------|--------|
+| **`main`** | macOS | Espada 3.7 for Apple Silicon (existing) |
+| **`windows`** | Windows | This code — Tauri 2 + WebView2 + e-Sword |
+
+Repo: [atrejokm301/Espada3.7](https://github.com/atrejokm301/Espada3.7)
 
 Tabs: **Biblia · Comentario · Diccionario · Léxico**
 
-> **WinUI 3 preview** (branch `feature/winui3-shell`): same features via Acrylic + WebView2.  
-> See [`src-winui/README.md`](src-winui/README.md) and run `.\scripts\run-winui.ps1`.
+Cross-references (release): en Biblia, selecciona versículo o palabra → **↔ Referencias**
+- **Por versículo**: TSK / TSKe / Referencias RV (comentarios e-Sword), citas clicables
+- **Por palabra**: concordancia en la Biblia actual (otras ocurrencias de la palabra)
 
-## Estado actual (Fase 2 — e-Sword real)
+## Producto principal: Tauri (nativo)
 
-- Estructura Tauri + UI tema oscuro
+| Pieza | Rol |
+|--------|-----|
+| **`Start-ADC-Native.bat`** | Abrir la app (recomendado) |
+| **`ui/`** | Interfaz de estudio (`index.html` + `app.js`) |
+| **`src-tauri/`** | Shell nativo Windows + lectores e-Sword (IPC) |
+| **WebView2** | Dibuja la UI dentro del `.exe` (sin Edge como host) |
+
+Todo lo nuevo de la UI vive en **`ui/`** y se **empaqueta en el build de Tauri** (`frontendDist: ../ui`).  
+No hace falta `adc-api` ni Edge para el uso diario.
+
+```powershell
+cd C:\Users\kevtr\Proyectos\asignacion-del-cielo-bible
+.\Start-ADC-Native.bat
+# o:
+npm run native
+# o (hot reload del shell):
+npm run tauri:dev
+```
+
+### Generar instalador / release
+
+```powershell
+npm run tauri:build
+# o: cargo tauri build  (desde repo con CLI)
+```
+
+Salida típica:
+
+- Instalador NSIS: `src-tauri\target\release\bundle\nsis\`
+- MSI: `src-tauri\target\release\bundle\msi\`
+- Binario: `src-tauri\target\release\Espada 3.7.exe` (product name) / `asignacion-del-cielo-bible.exe`
+
+## Estado (e-Sword local)
+
 - Lee módulos desde `C:\Program Files (x86)\e-Sword`
   - Biblias `.bbli` / `.bblx`
   - Comentarios `.cmti` / `.cmtx`
@@ -18,88 +64,57 @@ Tabs: **Biblia · Comentario · Diccionario · Léxico**
 - 66 libros, selector de módulo por pestaña
 - Notas y marcadores en `localStorage`
 - Default Biblia: Reina Valera 1960 si está instalada
+- **Offline**: textos y API son locales; fuentes web son opcionales (cae a Segoe UI)
 
 ## Requisitos
 
 | Herramienta | Para qué |
 |-------------|----------|
-| **Node.js 18+** | Frontend (ya lo tenés) |
 | **Rust** (rustup) | Compilar Tauri / `.exe` |
 | **Microsoft C++ Build Tools** | Compilar en Windows |
 | **WebView2** | Runtime de la ventana (suele venir en Win 10/11) |
+| **Node.js 18+** | Solo CLI de Tauri (`npm run tauri:*`) — opcional si usás el `.bat` + cargo |
 
 ### Instalar Rust (Windows)
 
-1. Abrí PowerShell y ejecutá:
-
 ```powershell
 winget install Rustlang.Rustup
-```
-
-O descargá el instalador: https://rustup.rs/
-
-2. Cerrá y reabrí la terminal, luego:
-
-```powershell
+# reiniciar terminal
 rustup default stable
-rustc --version
-cargo --version
 ```
 
-3. Instalá **Visual Studio Build Tools** con la workload *Desktop development with C++*:
-   - https://visualstudio.microsoft.com/visual-cpp-build-tools/
+Instalá **Visual Studio Build Tools** con *Desktop development with C++*:  
+https://visualstudio.microsoft.com/visual-cpp-build-tools/
 
-Docs oficiales Tauri: https://tauri.app/start/prerequisites/
+Docs Tauri: https://tauri.app/start/prerequisites/
 
-## Desarrollo (solo frontend, sin Rust)
+## Shells alternativos (no primarios)
 
-```powershell
-cd C:\Users\kevtr\Proyectos\asignacion-del-cielo-bible
-npm install
-npm run dev
+| Launcher | Qué es |
+|----------|--------|
+| **`Start-ADC-Stable.bat`** | Fallback: Edge app + `adc-api` HTTP (depuración) |
+| **`src-winui/`** | Preview WinUI 3 + Acrylic (experimental; ver `src-winui/README.md`) |
+
+La UI en `ui/` detecta el host (Tauri IPC primero, luego HTTP).
+
+## Arquitectura
+
 ```
-
-Abrí http://localhost:1420 en el navegador.
-
-## Desarrollo con ventana de escritorio (Tauri)
-
-```powershell
-cd C:\Users\kevtr\Proyectos\asignacion-del-cielo-bible
-npm install
-npm run tauri dev
+┌─────────────────────────────────────┐
+│  asignacion-del-cielo-bible.exe     │  ← nativo (Tauri)
+│  ┌───────────────────────────────┐  │
+│  │  ui/ (HTML + app.js)          │  │
+│  │  invoke("get_bible_chapter")  │  │
+│  └─────────────┬─────────────────┘  │
+│                │ IPC local            │
+│  ┌─────────────▼─────────────────┐  │
+│  │  Rust e-Sword readers         │  │
+│  └─────────────┬─────────────────┘  │
+└────────────────┼────────────────────┘
+                 ▼
+     C:\Program Files (x86)\e-Sword
 ```
-
-## Generar el `.exe` (instalador)
-
-```powershell
-cd C:\Users\kevtr\Proyectos\asignacion-del-cielo-bible
-npm run tauri build
-```
-
-Salida típica:
-
-- Instalador NSIS: `src-tauri\target\release\bundle\nsis\`
-- MSI: `src-tauri\target\release\bundle\msi\`
-- Binario: `src-tauri\target\release\Asignacion del Cielo Bible.exe`
-
-## Plan de fases
-
-1. **Estructura base** ← estás aquí  
-2. **Módulos e-Sword** — leer `.bbli`, `.cmti`, `.dcti` de tu carpeta  
-3. **Funciones** — full-text, comparación, notas/marcadores ampliados  
-4. **IA local** — Ollama + disclaimer teológico  
-5. **Compilar y probar** en tu PC  
-6. **Pulir** — atajos, exportar estudios, tema  
-
-## Comandos útiles para Grok
-
-- *Integra mis módulos de e-Sword…*
-- *Agrega más versos de Génesis completo…*
-- *Implementa búsqueda full-text…*
-- *Añade botón de IA local con Ollama…*
-- *Compila el proyecto Tauri y dame el .exe…*
 
 ## Licencia de datos
 
-Los textos bíblicos y comentarios de muestra se usan solo para desarrollo local.
 Al integrar módulos e-Sword, respetá las licencias de cada recurso.

@@ -308,7 +308,7 @@ function App() {
           </div>
           <div>
             <h1 className="text-base font-bold tracking-tight text-slate-50">
-              Asignación del Cielo
+              Espada 3.7
             </h1>
             <p className="text-[11px] text-slate-500">
               e-Sword local · {modules.length} módulos

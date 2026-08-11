@@ -15,7 +15,7 @@ Bara' se usa a menudo en paralelo con: ’asah («hacer»), yatsar («formar») 
   {
     term: "Dios",
     source: "Notas de estudio (muestra local)",
-    title: "Asignación del Cielo — diccionario de muestra",
+    title: "Espada 3.7 — diccionario de muestra",
     definition: `En Génesis 1 el nombre principal es אֱלֹהִים (Elohim). Destaca el poder creador y la soberanía sobre el cosmos. Más adelante en el Pentateuco aparece también יהוה (YHWH), el nombre del pacto.
 
 No confundir: "Dios" en español traduce distintos términos hebreos/griegos según el contexto. Para estudio léxico, preferir el número de Strong y el texto original.`,
@@ -23,7 +23,7 @@ No confundir: "Dios" en español traduce distintos términos hebreos/griegos seg
   {
     term: "cielos",
     source: "Notas de estudio (muestra local)",
-    title: "Asignación del Cielo — diccionario de muestra",
+    title: "Espada 3.7 — diccionario de muestra",
     definition: `Hebreo שָׁמַיִם (shamayim), dual/plural de forma. En Gn 1:1 forma merismo con "tierra": la totalidad de lo creado. En el relato puede referirse a la bóveda/expansión (raqia') o al dominio celestial según el versículo.
 
 En teología bíblica posterior, "cielos" también designa la morada de Dios (Sal 11:4; Mt 6:9), sin anular el sentido cósmico del término.`,
@@ -31,7 +31,7 @@ En teología bíblica posterior, "cielos" también designa la morada de Dios (Sa
   {
     term: "tierra",
     source: "Notas de estudio (muestra local)",
-    title: "Asignación del Cielo — diccionario de muestra",
+    title: "Espada 3.7 — diccionario de muestra",
     definition: `Hebreo אֶרֶץ (erets). Puede significar: (1) la tierra como planeta/suelo en contraste con los cielos; (2) territorio o país; (3) el suelo cultivable. En Gn 1:1 es el polo cósmico opuesto a "cielos". En 1:10 Dios nombra "Tierra" a lo seco.
 
 Importante para la teología de la creación y de la tierra prometida: el mismo vocablo viaja del cosmos al pacto.`,
@@ -39,7 +39,7 @@ Importante para la teología de la creación y de la tierra prometida: el mismo 
   {
     term: "luz",
     source: "Notas de estudio (muestra local)",
-    title: "Asignación del Cielo — diccionario de muestra",
+    title: "Espada 3.7 — diccionario de muestra",
     definition: `Hebreo אוֹר (or). Primera palabra creativa explícita en forma de mandato ("Sea la luz"). En el AT y el NT la luz se asocia a la presencia, verdad y salvación de Dios (Sal 27:1; Is 9:2; Jn 1:4-9).
 
 Distinguir de "lumbreras" (me'orot, Gn 1:14-16): la luz como realidad ordenadora precede a los cuerpos celestes asignados al día y la noche.`,
@@ -47,7 +47,7 @@ Distinguir de "lumbreras" (me'orot, Gn 1:14-16): la luz como realidad ordenadora
   {
     term: "imagen",
     source: "Notas de estudio (muestra local)",
-    title: "Asignación del Cielo — diccionario de muestra",
+    title: "Espada 3.7 — diccionario de muestra",
     definition: `Hebreo צֶלֶם (tselem) en Gn 1:26-27. El ser humano es creado "a imagen de Dios": dignidad, representación y vocación. No es una efigie material de Dios, sino que refleja su gobierno y carácter de forma limitada y creada.
 
 Junto a "semejanza" (demut). En el NT, Cristo es la imagen perfecta del Dios invisible (Col 1:15), y el creyente es conformado a esa imagen (Ro 8:29).`,

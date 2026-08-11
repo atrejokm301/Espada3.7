@@ -1,16 +1,20 @@
 {
-  "name": "asignacion-del-cielo-bible",
+  "name": "espada-3.7-windows",
   "private": true,
-  "version": "0.1.0",
+  "version": "3.7.0",
+  "description": "Espada 3.7 — estudio bíblico offline for Windows",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build && node scripts/fix-html.mjs",
+    "dev": "tauri dev",
+    "native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native.ps1",
+    "build": "tauri build",
+    "build:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
+    "build:ui-react-legacy": "tsc && vite build && node scripts/fix-html.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "npm run build && tauri dev",
-    "tauri:dev:hot": "tauri dev",
-    "tauri:preview": "npm run build && npm run preview -- --host 127.0.0.1 --port 1420 --strictPort"
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "stable:fallback": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-stable.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

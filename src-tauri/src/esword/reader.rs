@@ -213,6 +213,19 @@ pub struct ResolveStrongsResult {
     pub note: String,
 }
 
+/// One concordance-style hit for word cross-references.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BibleSearchHit {
+    pub book_number: i32,
+    pub book: String,
+    pub chapter: i32,
+    pub verse: i32,
+    pub snippet: String,
+    pub translation: String,
+    pub module: String,
+}
+
 const MAX_TEXT: usize = 50_000;
 
 static RE_BLU: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)<blu>(.*?)</blu>").unwrap());
@@ -721,6 +734,185 @@ pub fn probe_dictionary(module_path: &str, term: &str) -> ContentProbe {
 
 pub fn probe_lexicon(module_path: &str, term: &str) -> ContentProbe {
     probe_lexicon_fast(module_path, term)
+}
+
+/// Concordance-style search of a Bible module for a whole word (case-insensitive).
+/// Used by the cross-reference UI (word mode). Skips the optional origin verse.
+pub fn search_bible_word(
+    module_path: &str,
+    term: &str,
+    exclude_book: Option<i32>,
+    exclude_chapter: Option<i32>,
+    exclude_verse: Option<i32>,
+    limit: i32,
+) -> Result<Vec<BibleSearchHit>, String> {
+    let path = PathBuf::from(module_path);
+    let term = term.trim();
+    if term.is_empty() {
+        return Ok(vec![]);
+    }
+    // Guard against pathological queries (SQL LIKE + regex)
+    if term.chars().count() > 64 {
+        return Err("Término demasiado largo (máx. 64 caracteres)".into());
+    }
+    let limit = limit.clamp(1, 120) as usize;
+    let term_lower = term.to_lowercase();
+    let like = format!("%{term}%");
+
+    with_conn(&path, |conn, path_key| {
+        if !table_exists_cached(conn, path_key, "Bible") {
+            return Err("Este módulo no tiene tabla Bible".into());
+        }
+        let (title, abbr) = module_labels_cached(conn, &path);
+        let module_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let _ = title;
+
+        // Prefetch candidates with LIKE (text only — blobs can't be searched usefully).
+        // Cap overscan so whole-word filtering still returns up to `limit` hits.
+        let scan_cap = (limit * 8).clamp(40, 800) as i32;
+        let mut stmt = conn
+            .prepare(
+                "SELECT Book, Chapter, Verse, Scripture FROM Bible \
+                 WHERE typeof(Scripture)='text' AND Scripture LIKE ?1 \
+                 ORDER BY Book, Chapter, Verse \
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![like, scan_cap], |row| {
+                Ok((
+                    row.get::<_, i32>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, i32>(2)?,
+                    row.get::<_, Value>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut out = Vec::with_capacity(limit);
+        for r in rows {
+            let (book_n, ch, v, scripture) = r.map_err(|e| e.to_string())?;
+            if let (Some(eb), Some(ec), Some(ev)) =
+                (exclude_book, exclude_chapter, exclude_verse)
+            {
+                if book_n == eb && ch == ec && v == ev {
+                    continue;
+                }
+            }
+            let text = cell_to_text(&scripture).unwrap_or_default();
+            if text.is_empty() {
+                continue;
+            }
+            if !text_contains_whole_word(&text, &term_lower) {
+                continue;
+            }
+            let book_name = book_by_number(book_n)
+                .map(|b| b.name)
+                .unwrap_or_else(|| format!("Libro {book_n}"));
+            let snippet = make_word_snippet(&text, &term_lower, 140);
+            out.push(BibleSearchHit {
+                book_number: book_n,
+                book: book_name,
+                chapter: ch,
+                verse: v,
+                snippet,
+                translation: abbr.clone(),
+                module: module_name.clone(),
+            });
+            if out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    })
+}
+
+fn text_contains_whole_word(text: &str, term_lower: &str) -> bool {
+    let hay: String = text
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
+    let needle: String = term_lower
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
+    if needle.is_empty() {
+        return false;
+    }
+    let hay_chars: Vec<char> = hay.chars().collect();
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let nlen = needle_chars.len();
+    if nlen > hay_chars.len() {
+        return false;
+    }
+    'outer: for i in 0..=(hay_chars.len() - nlen) {
+        for (j, nc) in needle_chars.iter().enumerate() {
+            if hay_chars[i + j] != *nc {
+                continue 'outer;
+            }
+        }
+        let before_ok = i == 0 || !is_word_char(hay_chars[i - 1]);
+        let after_ok = i + nlen >= hay_chars.len() || !is_word_char(hay_chars[i + nlen]);
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '\'' || c == 'ʼ' || c == '’'
+}
+
+fn make_word_snippet(text: &str, term_lower: &str, max_chars: usize) -> String {
+    let plain: String = text.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
+    let lower: String = plain
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
+    let needle: String = term_lower
+        .chars()
+        .map(|c| c.to_lowercase().next().unwrap_or(c))
+        .collect();
+    let plain_chars: Vec<char> = plain.chars().collect();
+    let lower_chars: Vec<char> = lower.chars().collect();
+    let needle_chars: Vec<char> = needle.chars().collect();
+    let nlen = needle_chars.len();
+    let mut char_idx = None;
+    if nlen > 0 && nlen <= lower_chars.len() {
+        'outer: for i in 0..=(lower_chars.len() - nlen) {
+            for (j, nc) in needle_chars.iter().enumerate() {
+                if lower_chars[i + j] != *nc {
+                    continue 'outer;
+                }
+            }
+            char_idx = Some(i);
+            break;
+        }
+    }
+    let Some(idx) = char_idx else {
+        let mut s: String = plain_chars.iter().take(max_chars).collect();
+        if plain_chars.len() > max_chars {
+            s.push('…');
+        }
+        return s;
+    };
+    let half = max_chars.saturating_sub(nlen) / 2;
+    let start = idx.saturating_sub(half);
+    let end = (idx + nlen + half).min(plain_chars.len());
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.extend(plain_chars[start..end].iter());
+    if end < plain_chars.len() {
+        out.push('…');
+    }
+    out
 }
 
 pub fn search_commentaries(
@@ -1441,7 +1633,7 @@ fn clean_greek_token(s: &str) -> String {
 fn normalize_strong_code(raw: &str) -> String {
     let t = raw.to_uppercase().replace(' ', "");
     if t.starts_with('H') || t.starts_with('G') {
-        let prefix = t.chars().next().unwrap();
+        let prefix = t.chars().next().unwrap_or('G');
         let digits: String = t.chars().skip(1).filter(|c| c.is_ascii_digit()).collect();
         let num = digits.trim_start_matches('0');
         let num = if num.is_empty() { "0" } else { num };
@@ -1728,6 +1920,50 @@ mod tests {
     use super::*;
     use crate::esword::catalog::scan_modules;
     use std::time::Instant;
+
+    #[test]
+    fn search_bible_word_finds_whole_word_hits() {
+        let modules = match scan_modules(None) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let bible = modules.iter().find(|m| {
+            m.module_type == "bible"
+                && !m.encrypted
+                && (m.filename.to_lowercase().contains("reina")
+                    || m.filename.to_lowercase().contains("rv1960")
+                    || m.title.to_lowercase().contains("reina"))
+        }).or_else(|| modules.iter().find(|m| m.module_type == "bible" && !m.encrypted));
+        let Some(bible) = bible else {
+            eprintln!("skip: no bible for word search");
+            return;
+        };
+        let hits = match search_bible_word(&bible.path, "Dios", Some(1), Some(1), Some(1), 20) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("skip search: {e}");
+                return;
+            }
+        };
+        // Genesis 1 alone has many "Dios"; exclude only 1:1 so we should still get hits
+        assert!(
+            !hits.is_empty(),
+            "expected word hits for 'Dios' in {}",
+            bible.filename
+        );
+        for h in &hits {
+            assert!(h.chapter >= 1);
+            assert!(h.verse >= 1);
+            assert!(!h.snippet.is_empty());
+            // excluded origin
+            assert!(!(h.book_number == 1 && h.chapter == 1 && h.verse == 1));
+        }
+        eprintln!(
+            "search_bible_word Dios: {} hits via {}",
+            hits.len(),
+            bible.abbreviation
+        );
+    }
 
     #[test]
     fn get_chapter_genesis_1_and_cache_conn() {

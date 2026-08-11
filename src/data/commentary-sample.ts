@@ -23,7 +23,7 @@ Este versículo anuncia el origen de todo lo visible: no es mito eterno de mater
   {
     reference: "Génesis 1:1",
     source: "Notas de estudio (muestra local)",
-    title: "Asignación del Cielo — notas de muestra",
+    title: "Espada 3.7 — notas de muestra",
     text: `Estructura del versículo:
 1) Tiempo: "En el principio" (bereshith) — no hay "antes" narrativo en el texto; Dios inicia la historia.
 2) Acción: "creó" (bara') — verbo teológico fuerte; sujeto exclusivo de Dios en el AT.
@@ -37,7 +37,7 @@ Aplicación de estudio: al abrir la Biblia, el primer acto no es del hombre busc
   {
     reference: "Génesis 1:3",
     source: "Notas de estudio (muestra local)",
-    title: "Asignación del Cielo — notas de muestra",
+    title: "Espada 3.7 — notas de muestra",
     text: `"Y dijo Dios: Sea la luz; y fue la luz."
 
 La creación por la palabra (fiat) anticipa el tema de la Palabra eficaz a lo largo de la Escritura (Sal 33:6, 9; Jn 1:1-3; Heb 11:3). La luz aparece antes de sol y luna (vv. 14-16): Dios mismo es la fuente de orden y revelación; los luminarias son instrumentos, no ídolos.
@@ -47,7 +47,7 @@ Pregunta de estudio: ¿cómo se relaciona esta luz con "Dios es luz" (1 Jn 1:5) 
   {
     reference: "Génesis 1:26-27",
     source: "Notas de estudio (muestra local)",
-    title: "Asignación del Cielo — notas de muestra",
+    title: "Espada 3.7 — notas de muestra",
     text: `"Hagamos al hombre a nuestra imagen…" / "Y creó Dios al hombre a su imagen…"
 
 - "Hagamos" (plural deliberativo) ha sido leído en la tradición cristiana en continuidad con la revelación trinitaria; el texto hebreo también se ha explicado como plural de majestad o consulta divina.

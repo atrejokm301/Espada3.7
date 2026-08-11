@@ -1,4 +1,4 @@
-//! HTTP backend for Asignación del Cielo.
+//! HTTP backend for Espada 3.7 (Windows).
 //!
 //! - POST /invoke  — same commands as Tauri
 //! - GET  /health

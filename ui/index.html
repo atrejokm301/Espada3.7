@@ -1,9 +1,12 @@
 <!DOCTYPE html>
-<html lang="es" data-theme="true-dark">
+<html lang="es" data-theme="true-dark" data-font="google-sans-flex">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Asignación del Cielo Bible</title>
+  <title>Espada 3.7 (Windows)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@8..144,100..1000&family=Inter:wght@400;500;600;700&family=Libertinus+Serif:ital,wght@0,400;0,600;0,700;1,400&family=Roboto+Flex:opsz,wght@8..144,100..1000&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
   <style>
     /* ========== THEME TOKENS ========== */
     :root, [data-theme="true-dark"] {
@@ -26,7 +29,6 @@
       --tabs-bg: #000000;
       --shadow: 0 10px 30px rgba(0,0,0,.8);
       --card-radius: 14px;
-      /* Permanent highlights — semantic tokens (not raw hex in data) */
       --mark-gold-bg: rgba(251,191,36,.32);   --mark-gold-fg: #fef3c7;  --mark-gold-bd: rgba(251,191,36,.55);
       --mark-sky-bg: rgba(56,189,248,.28);    --mark-sky-fg: #e0f2fe;   --mark-sky-bd: rgba(56,189,248,.5);
       --mark-rose-bg: rgba(251,113,133,.28);  --mark-rose-fg: #ffe4e6;  --mark-rose-bd: rgba(251,113,133,.5);
@@ -138,7 +140,11 @@
       --mark-violet-bg: rgba(139,92,246,.14);--mark-violet-fg: #4c1d95; --mark-violet-bd: rgba(124,58,237,.35);
       --mark-peach-bg: rgba(249,115,22,.14); --mark-peach-fg: #7c2d12;  --mark-peach-bd: rgba(234,88,12,.35);
     }
-    /* WinUI 3 / Acrylic: translucent panels so system backdrop shows through */
+    /*
+     * Fluent Glass / True Dark Glass — original navy-slate palette (not pure black).
+     * Restored from pre-acrylic tokens: #0b0f16 / rgba(16,20,30) / #10141e–#161c2a.
+     * OS Acrylic still bleeds wallpaper; tint stays navy.
+     */
     [data-theme="fluent-glass"] {
       --bg: transparent;
       --panel: rgba(16, 20, 30, 0.52);
@@ -155,11 +161,15 @@
       --hl-fg: #e0f2fe;
       --hover-row: rgba(255, 255, 255, 0.07);
       --input-bg: rgba(8, 12, 20, 0.42);
-      --header-grad: linear-gradient(90deg, rgba(12,16,26,.55), rgba(28,38,58,.42), rgba(12,16,26,.55));
+      --header-grad: linear-gradient(
+        90deg,
+        rgba(12, 16, 26, 0.55),
+        rgba(28, 38, 58, 0.42),
+        rgba(12, 16, 26, 0.55)
+      );
       --tabs-bg: rgba(10, 14, 22, 0.40);
       --shadow: 0 14px 44px rgba(0, 0, 0, 0.32);
       --card-radius: 16px;
-      --glass-blur: blur(24px) saturate(1.4);
       --mark-gold-bg: rgba(251,191,36,.28);   --mark-gold-fg: #fef3c7;  --mark-gold-bd: rgba(251,191,36,.5);
       --mark-sky-bg: rgba(56,189,248,.24);    --mark-sky-fg: #e0f2fe;   --mark-sky-bd: rgba(56,189,248,.45);
       --mark-rose-bg: rgba(251,113,133,.24);  --mark-rose-fg: #ffe4e6;  --mark-rose-bd: rgba(251,113,133,.45);
@@ -167,29 +177,22 @@
       --mark-violet-bg: rgba(167,139,250,.26);--mark-violet-fg: #ede9fe;--mark-violet-bd: rgba(167,139,250,.5);
       --mark-peach-bg: rgba(251,146,60,.24);  --mark-peach-fg: #ffedd5; --mark-peach-bd: rgba(251,146,60,.45);
     }
-    /* data-theme lives on <html> */
     html[data-theme="fluent-glass"],
     html[data-theme="fluent-glass"] body,
     html[data-theme="fluent-glass"] #app {
       background: transparent !important;
     }
-    /* Stability: NO backdrop-filter under WebView2 — it has crashed the renderer
-       on this host when lists rebuild (Bible switch, etc.). Glass look uses
-       solid translucent colors only. */
-    html[data-theme="fluent-glass"] {
-      --panel: rgba(18, 22, 34, 0.94);
-      --panel-2: rgba(22, 28, 40, 0.96);
-      --input-bg: rgba(10, 14, 22, 0.96);
-      --header-grad: linear-gradient(90deg, #10141e, #161c2a, #10141e);
-      --tabs-bg: #0e121a;
-      --bg: #0b0f16;
+    /* Soft navy wash (not pure black) so acrylic reads as slate blue */
+    html[data-theme="fluent-glass"] body {
+      background: rgba(11, 15, 22, 0.22) !important;
     }
-    html[data-theme="fluent-glass"],
-    html[data-theme="fluent-glass"] body,
-    html[data-theme="fluent-glass"] #app {
-      background: #0b0f16 !important;
-    }
-    html[data-theme="fluent-glass"] .card {
+    html[data-theme="fluent-glass"] .card,
+    html[data-theme="fluent-glass"] .verse-list,
+    html[data-theme="fluent-glass"] .study-side,
+    html[data-theme="fluent-glass"] header.app-header,
+    html[data-theme="fluent-glass"] nav.tabs,
+    html[data-theme="fluent-glass"] footer,
+    html[data-theme="fluent-glass"] .modbar {
       border-color: rgba(255, 255, 255, 0.14);
       box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     }
@@ -200,8 +203,47 @@
     html[data-theme="fluent-glass"] .verse:hover {
       background: rgba(255, 255, 255, 0.08);
     }
-    html[data-theme="fluent-glass"] .pill-dd-panel {
-      background: rgba(16, 20, 30, 0.98);
+    html[data-theme="fluent-glass"] .pill-dd-panel,
+    html[data-theme="fluent-glass"] .modal,
+    html[data-theme="fluent-glass"] .ctx-menu {
+      background: rgba(16, 20, 30, 0.92) !important;
+    }
+    /*
+     * Frosted glass only: verse / Strong’s hover + click previews.
+     * Keep real glass (~90% fill) + heavy frost blur — not solid navy.
+     * Other themes keep normal --panel tokens.
+     */
+    html[data-theme="fluent-glass"] #ref-tooltip {
+      background: rgba(16, 22, 34, 0.90) !important;
+      border-color: rgba(255, 255, 255, 0.20) !important;
+      box-shadow:
+        0 16px 48px rgba(0, 0, 0, 0.42),
+        inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+      /* Frost glass (~90% fill). Blur ~32px is strong enough without GPU thrash. */
+      backdrop-filter: blur(32px) saturate(1.3) brightness(1.04);
+      -webkit-backdrop-filter: blur(32px) saturate(1.3) brightness(1.04);
+      opacity: 1 !important; /* opacity on the box itself would fade text; fill alpha is 0.90 */
+    }
+    html[data-theme="fluent-glass"] #ref-panel-bg {
+      background: rgba(6, 10, 18, 0.40) !important;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    html[data-theme="fluent-glass"] #ref-panel {
+      background: rgba(16, 22, 34, 0.90) !important;
+      border-color: rgba(255, 255, 255, 0.18) !important;
+      box-shadow:
+        0 20px 56px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.09) !important;
+      backdrop-filter: blur(34px) saturate(1.3) brightness(1.04);
+      -webkit-backdrop-filter: blur(34px) saturate(1.3) brightness(1.04);
+      opacity: 1 !important;
+    }
+    html[data-theme="fluent-glass"] #ref-panel header {
+      background: rgba(22, 28, 42, 0.88) !important;
+      border-bottom-color: rgba(255, 255, 255, 0.12) !important;
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
     }
     /* Subtle host chip when running under WinUI */
     .host-chip {
@@ -218,11 +260,55 @@
     }
     .host-chip.show { display: inline-flex; align-items: center; gap: 4px; }
     * { box-sizing: border-box; }
+    /* UI font (picker) vs original-script font (Hebrew/Greek only — always Libertinus Serif) */
+    :root {
+      --font-ui: "Google Sans Flex", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+      --font-original: "Libertinus Serif", "Times New Roman", "David", "SBL Hebrew", "SBL Greek", serif;
+    }
+    html[data-font="google-sans-flex"] {
+      --font-ui: "Google Sans Flex", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+    }
+    html[data-font="roboto"] {
+      --font-ui: "Roboto", "Segoe UI", system-ui, sans-serif;
+    }
+    html[data-font="inter"] {
+      --font-ui: "Inter", "Segoe UI", system-ui, sans-serif;
+    }
+    html[data-font="roboto-flex"] {
+      --font-ui: "Roboto Flex", "Roboto", "Segoe UI", system-ui, sans-serif;
+    }
     html, body {
       margin: 0; height: 100%;
       background: var(--bg); color: var(--text);
-      font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+      font-family: var(--font-ui);
       transition: background .2s ease, color .2s ease;
+    }
+    select, input, button, textarea {
+      font-family: inherit;
+    }
+    /* Hebrew & Greek only — never used for Spanish/UI chrome */
+    .script-he,
+    .script-el,
+    .script-original,
+    .lemmaref[data-lang="he"],
+    .lemmaref[data-lang="el"],
+    .lemma-original.script-he,
+    .lemma-original.script-el,
+    .lemma-original.script-original {
+      font-family: var(--font-original) !important;
+      font-feature-settings: "liga" 1, "kern" 1;
+    }
+    .script-he,
+    .lemmaref[data-lang="he"],
+    .lemma-original.script-he {
+      direction: rtl;
+      unicode-bidi: isolate;
+    }
+    .script-el,
+    .lemmaref[data-lang="el"],
+    .lemma-original.script-el {
+      direction: ltr;
+      unicode-bidi: isolate;
     }
     #app { display: flex; flex-direction: column; height: 100%; position: relative; }
     .app-chrome { flex-shrink: 0; }
@@ -264,15 +350,27 @@
       font-size: 12.5px;
       box-sizing: border-box;
     }
-    /* Chapter only: small native select (digits) */
+    /* Chapter only: compact native select — must fit 1–3 digits (e.g. 150).
+       Custom caret so WebView2/Windows OS chevron does not cover the number. */
     header.app-header .controls #sel-chapter {
-      width: 3.15rem;
-      min-width: 2.85rem;
-      max-width: 3.5rem;
-      padding-left: 8px;
-      padding-right: 18px;
+      width: 4.75rem;
+      min-width: 4.75rem;
+      max-width: 5.5rem;
+      padding: 6px 1.55rem 6px 0.55rem;
       text-align: center;
       text-align-last: center;
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum" 1;
+      box-sizing: border-box;
+      flex-shrink: 0;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+      background-color: var(--input-bg);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%2394a3b8' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 0.55rem center;
+      background-size: 10px 6px;
     }
     /* Custom book / bible pills — label is full text (not native <select>) */
     .pill-dd {
@@ -622,8 +720,26 @@
       background: var(--accent-soft); color: var(--accent);
       border-color: var(--accent); font-weight: 600;
     }
-    .bible-toolbar .btn-hist {
+    .bible-toolbar-actions {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    }
+    .bible-toolbar .btn-hist,
+    .bible-toolbar .btn-xref {
       font-size: 12px; padding: 6px 12px; border-radius: 999px;
+    }
+    .bible-toolbar .btn-xref {
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      background: var(--accent-soft);
+      font-weight: 600;
+    }
+    .bible-toolbar .btn-xref:hover {
+      filter: brightness(1.08);
+    }
+    .bible-toolbar .btn-xref:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      filter: none;
     }
     .bible-toolbar .btn-hist.active-hint {
       border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
@@ -1046,71 +1162,442 @@
       border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
     }
     .sel-tools { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .sel-tools #btn-to-xref {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-soft);
+      font-weight: 600;
+    }
+    .sel-tools #btn-to-xref:disabled {
+      opacity: 0.45;
+      border-color: var(--border);
+      color: var(--muted);
+      background: transparent;
+      font-weight: 500;
+    }
 
-    /* Themes gallery */
-    .themes-intro { color: var(--muted); font-size: 13px; line-height: 1.5; max-width: 52rem; }
-    .theme-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-      gap: 14px;
-      overflow: auto;
-      padding: 4px 2px 16px;
+    /* Cross-reference modal */
+    #xref-modal .modal { width: min(560px, 100%); max-height: 86vh; }
+    .xref-modes {
+      display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
     }
-    .theme-card {
-      border: 2px solid var(--border);
-      border-radius: 16px;
-      overflow: hidden;
-      cursor: pointer;
-      background: var(--panel);
-      transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease;
-      text-align: left;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      min-height: 168px;
+    .xref-modes button {
+      border-radius: 999px; padding: 6px 12px; font-size: 12px;
+      background: transparent; color: var(--muted); border: 1px solid var(--border);
     }
-    .theme-card:hover {
-      transform: translateY(-2px);
-      border-color: var(--accent);
-      box-shadow: var(--shadow);
+    .xref-modes button.active {
+      background: var(--accent-soft); color: var(--accent);
+      border-color: var(--accent); font-weight: 600;
     }
-    .theme-card.selected {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-soft);
+    .xref-toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      margin-bottom: 10px; font-size: 12px; color: var(--muted);
     }
-    .theme-swatch {
-      height: 72px;
-      display: flex; align-items: flex-end; justify-content: space-between;
+    .xref-toolbar label {
+      display: flex; align-items: center; gap: 6px; flex: 1 1 220px;
+    }
+    .xref-toolbar select { flex: 1; min-width: 0; max-width: 100%; }
+    .xref-list { display: flex; flex-direction: column; gap: 8px; }
+    .xref-group {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel-2);
       padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
     }
-    .theme-swatch .sample-title {
-      font-size: 13px; font-weight: 700; text-decoration: underline;
-      text-underline-offset: 2px;
+    .xref-group h4 {
+      margin: 0 0 8px; font-size: 12px; font-weight: 700;
+      color: var(--accent); letter-spacing: 0.02em;
+      text-transform: none;
     }
-    .theme-swatch .sample-jesus { color: #c62828; font-weight: 700; font-size: 12px; }
-    .theme-card-body { padding: 12px 14px; flex: 1; }
-    .theme-card-body h3 {
-      margin: 0 0 6px; font-size: 1.05rem; color: var(--accent);
+    .xref-group .xref-body {
+      font-size: 13px; line-height: 1.55; color: var(--text);
+    }
+    .xref-hit {
+      display: flex; flex-direction: column; gap: 4px;
+      text-align: left; width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: var(--panel-2);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease;
+    }
+    .xref-hit:hover, .xref-hit:focus-visible {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      outline: none;
+    }
+    .xref-hit .xref-ref {
+      font-weight: 700; color: var(--accent); font-size: 13px;
       text-decoration: underline; text-underline-offset: 3px;
     }
-    .theme-card-body p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
-    .theme-card .check {
-      display: none; font-size: 11px; font-weight: 700; color: var(--ok);
-      padding: 0 14px 12px;
+    .xref-hit .xref-snip {
+      font-size: 12px; color: var(--muted); line-height: 1.45;
     }
-    .theme-card.selected .check { display: block; }
-    .theme-legend {
-      border: 1px dashed var(--border); border-radius: 12px;
-      padding: 12px 14px; color: var(--muted); font-size: 12px; line-height: 1.55;
+    .xref-empty {
+      padding: 16px 8px; text-align: center; color: var(--muted); font-size: 13px;
+    }
+
+    /* In-app e-ink verse preview (app-side only — not hardware / not full-app chrome) */
+    #eink-modal .modal {
+      width: min(440px, 100%);
+      max-height: 88vh;
+      background: #e8e4d9;
+      border-color: #1a1a1a;
+    }
+    #eink-modal .modal header {
+      background: #ddd8cc;
+      border-bottom-color: #c4bfb0;
+    }
+    #eink-modal .modal header h3 {
+      color: #1a1a1a;
+      text-decoration: none;
+    }
+    #eink-modal .modal header button,
+    #eink-modal .eink-toolbar button {
+      background: #f4f1e8;
+      color: #1a1a1a;
+      border-color: #8a8578;
+    }
+    #eink-modal .modal header button:hover,
+    #eink-modal .eink-toolbar button:hover {
+      border-color: #1a1a1a;
+      color: #000;
+    }
+    #eink-modal .eink-toolbar button.active {
+      background: #1a1a1a;
+      color: #f4f1e8;
+      border-color: #1a1a1a;
+      font-weight: 600;
+    }
+    #eink-modal .body {
+      background: #e8e4d9;
+      color: #1a1a1a;
+    }
+    .eink-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: #4a463c;
+    }
+    .eink-toolbar .eink-tb-label {
+      margin-right: 2px;
+      color: #5c564a;
+    }
+    .eink-board {
+      /* Physical-board-ish card inside the modal — not a full-screen takeover */
+      width: 100%;
+      min-height: 220px;
+      max-height: min(52vh, 360px);
+      margin: 0 auto;
+      padding: 28px 24px 22px;
+      box-sizing: border-box;
+      border: 3px solid #2a2a2a;
+      border-radius: 6px;
+      background: #f7f4ea;
+      box-shadow:
+        inset 0 0 0 1px #cfc9b8,
+        0 2px 0 #9a9588;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 16px;
+      overflow: auto;
+    }
+    .eink-board.eink-size-sm .eink-verse-text { font-size: 1.05rem; line-height: 1.55; }
+    .eink-board.eink-size-md .eink-verse-text { font-size: 1.35rem; line-height: 1.5; }
+    .eink-board.eink-size-lg .eink-verse-text { font-size: 1.7rem; line-height: 1.45; }
+    .eink-verse-text {
+      margin: 0;
+      color: #0d0d0d;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      text-align: left;
+      font-family: "Segoe UI", "Georgia", "Times New Roman", serif;
+    }
+    .eink-verse-ref {
+      margin: 0;
+      color: #1a1a1a;
+      font-size: 0.92rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-align: right;
+      border-top: 1px solid #bdb7a6;
+      padding-top: 12px;
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    .eink-verse-meta {
+      margin: 0;
+      font-size: 11px;
+      color: #5c564a;
+      text-align: right;
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    .eink-empty {
+      margin: 0;
+      color: #5c564a;
+      font-size: 14px;
+      text-align: center;
+      line-height: 1.5;
+    }
+    .eink-hint {
+      margin: 10px 0 0;
+      font-size: 11px;
+      color: #5c564a;
+      line-height: 1.4;
+    }
+    .sel-tools #btn-eink {
+      border-color: #8a8578;
+      color: #2a2a2a;
+      background: #f0ebe0;
+      font-weight: 600;
+    }
+    .sel-tools #btn-eink:disabled {
+      opacity: 0.45;
+      border-color: var(--border);
+      color: var(--muted);
+      background: transparent;
+      font-weight: 500;
+    }
+
+    /* Themes + fonts: modern compact pills (not giant cards) */
+    #panel-temas.panel.active {
+      display: block;
+      overflow-x: hidden;
+      overflow-y: auto;
+      height: 100%;
+      min-height: 0;
+      padding-bottom: 28px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .themes-intro {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 40rem;
+      margin: 0 0 12px;
+    }
+    .theme-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: stretch;
+      padding: 2px 0 18px;
+    }
+    /* Theme pill: color chip + name */
+    .theme-pill {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+      padding: 8px 14px 8px 10px;
+      border-radius: 999px;
+      border: 1.5px solid var(--border);
       background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+      transition: border-color .15s ease, box-shadow .15s ease, transform .12s ease, background .15s ease;
+      box-sizing: border-box;
+      max-width: 100%;
     }
-    .theme-legend b { color: var(--accent); }
-    .theme-legend .woc { color: var(--jesus); }
-    /* True dark swatch preview */
-    .theme-card[data-theme-id="true-dark"] .theme-swatch {
-      background: #000000 !important;
-      border-bottom-color: #1a1a1a;
+    .theme-pill:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+    }
+    .theme-pill:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .theme-pill.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+      background: color-mix(in srgb, var(--accent-soft) 70%, var(--panel));
+    }
+    .theme-pill-dot {
+      flex: 0 0 auto;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      border: 1.5px solid color-mix(in srgb, var(--text) 18%, transparent);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08);
+    }
+    .theme-pill-label {
+      font-size: 13.5px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    .theme-pill-check {
+      display: none;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--ok);
+      margin-left: 2px;
+    }
+    .theme-pill.selected .theme-pill-check { display: inline; }
+
+    /* Glass pill (True Dark Glass only) */
+    .theme-pill--glass {
+      overflow: hidden;
+      color: #e8f4ff;
+      border-color: rgba(125, 211, 252, 0.45);
+      background: rgba(36, 48, 66, 0.55);
+    }
+    .theme-pill--glass::before {
+      content: "";
+      position: absolute;
+      inset: -40%;
+      background:
+        radial-gradient(circle at 25% 35%, rgba(125, 211, 252, 0.55), transparent 42%),
+        radial-gradient(circle at 78% 70%, rgba(96, 165, 250, 0.4), transparent 48%),
+        linear-gradient(125deg, #1e293b 0%, #334155 55%, #0f172a 100%);
+      filter: blur(16px);
+      z-index: 0;
+      pointer-events: none;
+    }
+    .theme-pill--glass > * { position: relative; z-index: 1; }
+    .theme-pill--glass .theme-pill-dot {
+      border-color: rgba(255, 255, 255, 0.35);
+      background:
+        radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.55), transparent 55%),
+        linear-gradient(145deg, rgba(125, 211, 252, 0.7), rgba(30, 41, 59, 0.85));
+      box-shadow: 0 0 10px rgba(125, 211, 252, 0.35);
+    }
+    .theme-pill--glass.selected {
+      border-color: #7dd3fc;
+      box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.25);
+    }
+    .theme-pill--glass .theme-pill-check { color: #86efac; }
+
+    .theme-pill[data-theme-id="true-dark"] .theme-pill-dot {
+      background: #000 !important;
+      border-color: #444;
+    }
+
+    /* Font picker — compact pills, sample text in each typeface */
+    .fonts-section {
+      margin-top: 8px;
+      margin-bottom: 8px;
+      padding-top: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .fonts-section-title {
+      margin: 0 0 6px;
+      font-size: 1.05rem;
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    .fonts-section-intro {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      margin: 0 0 12px;
+      max-width: 40rem;
+    }
+    .font-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      padding: 2px 0 14px;
+      align-items: stretch;
+    }
+    .font-pill {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 3px;
+      min-width: 168px;
+      max-width: 280px;
+      min-height: 64px;
+      padding: 10px 16px 11px;
+      border-radius: 18px;
+      border: 1.5px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      user-select: none;
+      transition: border-color .15s ease, box-shadow .15s ease, transform .12s ease, background .15s ease;
+      box-sizing: border-box;
+      text-align: left;
+    }
+    .font-pill:hover {
+      border-color: var(--accent);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+    }
+    .font-pill:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .font-pill.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+      background: color-mix(in srgb, var(--accent-soft) 70%, var(--panel));
+    }
+    .font-pill-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.2;
+      color: var(--text);
+      max-width: 100%;
+    }
+    .font-pill-name .font-pill-check {
+      display: none;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--ok);
+      flex-shrink: 0;
+    }
+    .font-pill.selected .font-pill-check { display: inline; }
+    /* Distinctive sample line — always rendered in that font */
+    .font-pill-sample {
+      font-size: 15px;
+      font-weight: 500;
+      line-height: 1.35;
+      color: var(--muted);
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    .font-pill.selected .font-pill-sample { color: var(--text); }
+    .font-original-note {
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin: 0 0 18px;
+      background: var(--accent-soft);
+      color: var(--text);
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+    .font-original-note b { color: var(--accent); }
+    .font-original-note .orig-sample {
+      font-family: var(--font-original);
+      font-size: 1.2rem;
+      font-weight: 600;
+      display: inline-block;
+      margin-top: 6px;
+      letter-spacing: 0.02em;
+    }
+    .font-original-note .orig-sample .he {
+      direction: rtl;
+      unicode-bidi: isolate;
+      margin-right: 10px;
     }
 
     /* Clickable Bible references in study panels */
@@ -1255,7 +1742,7 @@
 <body>
   <div id="boot">
     <div>
-      <strong>Asignación del Cielo Bible</strong>
+      <strong>Espada 3.7</strong>
       <div id="boot-msg">Iniciando…</div>
       <div id="boot-hint" style="margin-top:12px;font-size:12px;max-width:28rem;line-height:1.45;opacity:.85"></div>
     </div>
@@ -1292,31 +1779,121 @@
       }
     });
 
-    var base = "";
-    try {
-      if (location.protocol === "http:" || location.protocol === "https:") {
-        base = location.origin;
-      }
-    } catch (e) {}
-    if (!base) {
-      set("Usá Start-ADC-Stable.bat (no abras el HTML a solas).", true);
-      return;
+    /**
+     * Host resolution:
+     * - Tauri desktop: window.__TAURI__ / __TAURI_INTERNALS__ (IPC, no HTTP)
+     * - adc-api stable: only port 17865 or injected __ADC_API_BASE__
+     * Never treat Tauri’s asset server (e.g. 127.0.0.1:1430) as JSON API —
+     * that returns HTML and breaks with "Unexpected token '<'".
+     */
+    function getTauriInvokeFn() {
+      try {
+        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+          return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+        }
+        if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+          return window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+        }
+      } catch (e) {}
+      return null;
     }
-    window.__ADC_API_BASE__ = base;
-    window.__ADC_HOST__ = window.__ADC_HOST__ || "edge-app";
+
+    function looksLikeAdcApiOrigin() {
+      try {
+        if (window.__ADC_API_BASE__) return true;
+        if (location.protocol !== "http:" && location.protocol !== "https:") return false;
+        // Stable sidecar only — not Tauri dev asset ports (1420/1430/…)
+        if (String(location.port) === "17865") return true;
+        return false;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function resolveHttpApiBase() {
+      if (window.__ADC_API_BASE__) {
+        return String(window.__ADC_API_BASE__).replace(/\/$/, "");
+      }
+      if (looksLikeAdcApiOrigin()) return location.origin;
+      return "";
+    }
+
+    var base = resolveHttpApiBase();
+    if (base && !window.__ADC_API_BASE__) {
+      window.__ADC_API_BASE__ = base;
+    }
+    if (!window.__ADC_HOST__) {
+      window.__ADC_HOST__ = getTauriInvokeFn()
+        ? "tauri"
+        : base
+          ? "edge-app"
+          : "";
+    }
 
     function inv(cmd, args) {
-      return fetch(base + "/invoke", {
+      var tinv = getTauriInvokeFn();
+      if (tinv) {
+        return Promise.resolve(tinv(cmd, args || {}));
+      }
+      var httpBase = resolveHttpApiBase();
+      if (!httpBase) {
+        return Promise.reject(new Error(
+          "No hay API. Abrí con Start-ADC-Native.bat (Tauri nativo)"
+        ));
+      }
+      return fetch(httpBase + "/invoke", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cmd: cmd, args: args || {} })
       }).then(function (res) {
+        var ct = (res.headers && res.headers.get("content-type")) || "";
+        if (ct.indexOf("application/json") === -1 && ct.indexOf("json") === -1) {
+          return res.text().then(function (txt) {
+            var head = String(txt || "").slice(0, 40).replace(/\s+/g, " ");
+            throw new Error(
+              "El servidor devolvió HTML en vez de JSON (" + httpBase + "/invoke). " +
+              "¿Estás en Tauri sin IPC? " + head
+            );
+          });
+        }
         return res.json().then(function (body) {
           if (!res.ok || (body && body.ok === false)) {
             throw new Error((body && body.error) || ("HTTP " + res.status));
           }
           return body.result;
         });
+      });
+    }
+
+    function waitForHost(maxMs) {
+      maxMs = maxMs || 4000;
+      var start = Date.now();
+      return new Promise(function (resolve) {
+        function tick() {
+          if (getTauriInvokeFn()) {
+            window.__ADC_HOST__ = "tauri";
+            // Do not point HTTP base at Tauri asset origin
+            try { delete window.__ADC_API_BASE__; } catch (e) {
+              window.__ADC_API_BASE__ = "";
+            }
+            base = "";
+            resolve("tauri");
+            return;
+          }
+          base = resolveHttpApiBase();
+          if (base) {
+            window.__ADC_API_BASE__ = base;
+            window.__ADC_HOST__ = window.__ADC_HOST__ || "edge-app";
+            resolve("http");
+            return;
+          }
+          if (Date.now() - start >= maxMs) {
+            resolve("");
+            return;
+          }
+          setTimeout(tick, 50);
+        }
+        tick();
       });
     }
 
@@ -1356,8 +1933,19 @@
       if (mc) mc.textContent = modCount + " módulos e-Sword";
       var chip = document.getElementById("host-chip");
       if (chip) {
-        chip.classList.add("show");
-        chip.textContent = "Stable";
+        var host = window.__ADC_HOST__ || "";
+        if (host === "tauri") {
+          chip.classList.add("show");
+          chip.textContent = "Tauri";
+          chip.title = "Escritorio Tauri (IPC local)";
+        } else if (host === "winui3") {
+          chip.classList.add("show");
+          chip.textContent = "Fluent";
+        } else if (host === "edge-app" || base) {
+          chip.classList.add("show");
+          chip.textContent = "Stable";
+          chip.title = "Shell estable (Edge app + adc-api)";
+        }
       }
       window.__ADC_APP_SHOWN__ = true;
     }
@@ -1535,12 +2123,12 @@
     }
 
     var MINI_THEMES = [
-      { id: "plain-white", name: "Plain White", desc: "Fondo blanco limpio.", swatch: "#ffffff", swatchText: "#0f172a", accent: "#1d4ed8" },
-      { id: "pastel-green", name: "Pastel Green", desc: "Verde suave.", swatch: "#eef8f0", swatchText: "#14352a", accent: "#0f766e" },
-      { id: "pastel-yellow", name: "Pastel Yellow", desc: "Crema cálido.", swatch: "#fff9e8", swatchText: "#3b2f0b", accent: "#a16207" },
-      { id: "light-blue", name: "Light Blue", desc: "Azul claro.", swatch: "#eef6ff", swatchText: "#0c2a4a", accent: "#1d4ed8" },
-      { id: "true-dark", name: "True Dark Mode", desc: "Negro total.", swatch: "#000000", swatchText: "#fafafa", accent: "#60a5fa" },
-      { id: "fluent-glass", name: "Fluent Glass", desc: "Tema escritorio.", swatch: "rgba(30,40,55,.55)", swatchText: "#e0f2fe", accent: "#7dd3fc" }
+      { id: "plain-white", name: "Plain White", swatch: "#ffffff", accent: "#1d4ed8", glass: false },
+      { id: "pastel-green", name: "Pastel Green", swatch: "#eef8f0", accent: "#0f766e", glass: false },
+      { id: "pastel-yellow", name: "Pastel Yellow", swatch: "#fff9e8", accent: "#a16207", glass: false },
+      { id: "light-blue", name: "Light Blue", swatch: "#eef6ff", accent: "#1d4ed8", glass: false },
+      { id: "true-dark", name: "True Dark Solid", swatch: "#000000", accent: "#60a5fa", glass: false },
+      { id: "fluent-glass", name: "Fluent Glass", swatch: "rgba(30,40,55,.55)", accent: "#7dd3fc", glass: true }
     ];
 
     function applyMiniTheme(id) {
@@ -1550,9 +2138,33 @@
       }
       if (!ok) id = "true-dark";
       document.documentElement.setAttribute("data-theme", id);
+      if (id === "fluent-glass") {
+        document.documentElement.setAttribute("data-glass", "1");
+      } else {
+        document.documentElement.removeAttribute("data-glass");
+      }
       try { localStorage.setItem("adc-bible-theme-v1", id); } catch (e) {}
       M.theme = id;
       renderMiniThemes();
+    }
+
+    var MINI_FONTS = [
+      { id: "google-sans-flex", name: "Google Sans Flex", sample: "Aa Bb · Juan 3:16 · Biblia", stack: '"Google Sans Flex", system-ui, sans-serif' },
+      { id: "roboto", name: "Roboto", sample: "Aa Bb · Juan 3:16 · Biblia", stack: '"Roboto", system-ui, sans-serif' },
+      { id: "inter", name: "Inter", sample: "Aa Bb · Juan 3:16 · Biblia", stack: '"Inter", system-ui, sans-serif' },
+      { id: "roboto-flex", name: "Roboto Flex", sample: "Aa Bb · Juan 3:16 · Biblia", stack: '"Roboto Flex", "Roboto", system-ui, sans-serif' }
+    ];
+
+    function applyMiniFont(id) {
+      var ok = false;
+      for (var i = 0; i < MINI_FONTS.length; i++) {
+        if (MINI_FONTS[i].id === id) ok = true;
+      }
+      if (!ok) id = "google-sans-flex";
+      document.documentElement.setAttribute("data-font", id);
+      try { localStorage.setItem("adc-bible-font-v1", id); } catch (e) {}
+      M.font = id;
+      renderMiniFonts();
     }
 
     function renderMiniThemes() {
@@ -1564,28 +2176,59 @@
       grid.innerHTML = "";
       for (var i = 0; i < MINI_THEMES.length; i++) {
         (function (t) {
-          var card = document.createElement("div");
-          card.className = "theme-card" + (M.theme === t.id ? " selected" : "");
-          card.setAttribute("role", "button");
-          card.tabIndex = 0;
-          card.innerHTML =
-            '<div class="theme-swatch" style="background:' + t.swatch + ';color:' + t.swatchText + '">' +
-              '<span class="sample-title" style="color:' + t.accent + '">Juan 3:16</span>' +
-              '<span class="sample-jesus">“Sígueme”</span>' +
-            "</div>" +
-            '<div class="theme-card-body"><h3></h3><p></p></div>' +
-            '<div class="check">✓ Tema activo</div>';
-          card.querySelector("h3").textContent = t.name;
-          card.querySelector("p").textContent = t.desc;
-          card.onclick = function () { applyMiniTheme(t.id); };
-          card.onkeydown = function (ev) {
-            if (ev.key === "Enter" || ev.key === " ") {
-              ev.preventDefault();
-              applyMiniTheme(t.id);
-            }
-          };
-          grid.appendChild(card);
+          var pill = document.createElement("button");
+          pill.type = "button";
+          pill.className =
+            "theme-pill" +
+            (t.glass ? " theme-pill--glass" : "") +
+            (M.theme === t.id ? " selected" : "");
+          pill.setAttribute("data-theme-id", t.id);
+          pill.setAttribute("aria-label", "Tema " + t.name);
+          pill.innerHTML =
+            '<span class="theme-pill-dot" aria-hidden="true"></span>' +
+            '<span class="theme-pill-label"></span>' +
+            '<span class="theme-pill-check" aria-hidden="true">✓</span>';
+          var dot = pill.querySelector(".theme-pill-dot");
+          if (!t.glass) {
+            dot.style.background = t.swatch;
+            dot.style.boxShadow = "inset 0 0 0 1px " + t.accent + "55";
+          }
+          pill.querySelector(".theme-pill-label").textContent = t.name;
+          pill.onclick = function () { applyMiniTheme(t.id); };
+          grid.appendChild(pill);
         })(MINI_THEMES[i]);
+      }
+    }
+
+    function renderMiniFonts() {
+      var grid = document.getElementById("font-grid");
+      if (!grid) return;
+      var cur = M.font || "google-sans-flex";
+      try { cur = localStorage.getItem("adc-bible-font-v1") || cur; } catch (e) {}
+      M.font = cur;
+      grid.innerHTML = "";
+      for (var i = 0; i < MINI_FONTS.length; i++) {
+        (function (f) {
+          var pill = document.createElement("button");
+          pill.type = "button";
+          pill.className = "font-pill" + (M.font === f.id ? " selected" : "");
+          pill.setAttribute("data-font-id", f.id);
+          pill.setAttribute("aria-label", "Fuente " + f.name);
+          pill.innerHTML =
+            '<span class="font-pill-name"></span>' +
+            '<span class="font-pill-sample"></span>';
+          var nameEl = pill.querySelector(".font-pill-name");
+          nameEl.style.fontFamily = f.stack;
+          nameEl.innerHTML =
+            '<span class="font-pill-check" aria-hidden="true">✓</span>' +
+            '<span class="font-pill-name-text"></span>';
+          nameEl.querySelector(".font-pill-name-text").textContent = f.name;
+          var sample = pill.querySelector(".font-pill-sample");
+          sample.style.fontFamily = f.stack;
+          sample.textContent = f.sample;
+          pill.onclick = function () { applyMiniFont(f.id); };
+          grid.appendChild(pill);
+        })(MINI_FONTS[i]);
       }
     }
 
@@ -1609,7 +2252,10 @@
         if (tabId === "biblia" || tabId === "temas") modbar.classList.remove("show");
         else modbar.classList.add("show");
       }
-      if (tabId === "temas") renderMiniThemes();
+      if (tabId === "temas") {
+        renderMiniThemes();
+        renderMiniFonts();
+      }
     }
 
     function wireMini() {
@@ -1725,21 +2371,67 @@
       document.body.appendChild(s);
     }
 
+    function applySavedChrome() {
+      try {
+        var tid = localStorage.getItem("adc-bible-theme-v1") ||
+          (window.__ADC_HOST__ === "tauri" ? "true-dark" : "fluent-glass");
+        document.documentElement.setAttribute("data-theme", tid);
+        M.theme = tid;
+      } catch (e) {
+        M.theme = "true-dark";
+        document.documentElement.setAttribute("data-theme", "true-dark");
+      }
+      try {
+        var fid = localStorage.getItem("adc-bible-font-v1") || "google-sans-flex";
+        if (
+          fid !== "google-sans-flex" &&
+          fid !== "roboto" &&
+          fid !== "inter" &&
+          fid !== "roboto-flex"
+        ) {
+          fid = "google-sans-flex";
+        }
+        document.documentElement.setAttribute("data-font", fid);
+        M.font = fid;
+      } catch (e2) {
+        M.font = "google-sans-flex";
+        document.documentElement.setAttribute("data-font", "google-sans-flex");
+      }
+    }
+
     function miniBoot() {
-      set("Contactando servidor…");
-      fetch(base + "/health", { cache: "no-store" })
-        .then(function (r) {
-          if (!r.ok) throw new Error("health HTTP " + r.status);
-          return r.json();
-        })
-        .then(function (j) {
-          if (!j || !j.ok) throw new Error("health inválido");
-          setHint(base + " · ui=" + (j.ui ? "sí" : "no"));
-          set("Escaneando e-Sword…");
-          return Promise.all([
-            inv("list_esword_modules", { path: null }),
-            inv("list_bible_books")
-          ]);
+      set("Detectando host…");
+      waitForHost(4000)
+        .then(function (kind) {
+          if (!kind) {
+            throw new Error(
+              "Sin API. Usá: Start-ADC-Native.bat (Tauri nativo)"
+            );
+          }
+          if (kind === "tauri") {
+            setHint("Tauri · IPC local");
+            set("Escaneando e-Sword…");
+            return Promise.all([
+              inv("list_esword_modules", { path: null }),
+              inv("list_bible_books")
+            ]);
+          }
+          // HTTP adc-api: health check first
+          set("Contactando servidor…");
+          return fetch(base + "/health", { cache: "no-store" })
+            .then(function (r) {
+              if (!r.ok) throw new Error("health HTTP " + r.status);
+              return r.json();
+            })
+            .then(function (j) {
+              if (!j || !j.ok) throw new Error("health inválido");
+              setHint(base + " · ui=" + (j.ui ? "sí" : "no"));
+              set("Escaneando e-Sword…");
+              return Promise.all([
+                inv("list_esword_modules", { path: null }),
+                inv("list_bible_books")
+              ]);
+            });
         })
         .then(function (pair) {
           var mods = pair[0] || [];
@@ -1771,25 +2463,28 @@
           });
         })
         .then(function (pack) {
-          // Apply saved theme before showing shell
-          try {
-            var tid = localStorage.getItem("adc-bible-theme-v1") || "fluent-glass";
-            document.documentElement.setAttribute("data-theme", tid);
-            M.theme = tid;
-          } catch (e) {
-            M.theme = "fluent-glass";
-            document.documentElement.setAttribute("data-theme", "fluent-glass");
-          }
+          applySavedChrome();
           showShell(pack.mods.length);
           paintChapter(pack.ch);
-          wireMini(); // clicks + themes work immediately (synced mini state)
-          renderMiniThemes(); // prebuild theme cards
-          loadFullApp(); // optional full app enhancement
+          wireMini();
+          renderMiniThemes();
+          renderMiniFonts();
+          loadFullApp();
         })
         .catch(function (e) {
           console.error(e);
           set("Error: " + (e.message || e), true);
-          setHint("¿adc-api corriendo? Start-ADC-Stable.bat · " + base);
+          var host = window.__ADC_HOST__ || "";
+          if (host === "tauri" || getTauriInvokeFn()) {
+            setHint("Tauri detectado pero falló el escaneo e-Sword. Revisá C:\\Program Files (x86)\\e-Sword");
+          } else {
+            setHint(
+              "Preferí Start-ADC-Native.bat · fallback Edge: Start-ADC-Stable.bat · " +
+                (base || "http://127.0.0.1:17865")
+            );
+          }
+          // Still try full app.js (may recover on Tauri once IPC is ready)
+          try { loadFullApp(); } catch (e2) {}
         });
     }
 
@@ -1803,10 +2498,10 @@
         <div class="brand">
           <div class="logo">✦</div>
           <div>
-            <h1>Asignación del Cielo</h1>
-            <p id="mod-count">e-Sword local</p>
+            <h1>Espada 3.7</h1>
+            <p id="mod-count">Windows · e-Sword local</p>
           </div>
-          <span class="host-chip" id="host-chip" title="Corriendo en WinUI 3">Fluent</span>
+          <span class="host-chip" id="host-chip" title="Espada 3.7 for Windows">Windows</span>
         </div>
         <div class="controls">
           <div class="pill-dd" id="pill-book">
@@ -1862,7 +2557,10 @@
                 <button type="button" data-bible-view="single" class="active" role="tab" aria-selected="true">Lectura</button>
                 <button type="button" data-bible-view="parallel" role="tab" aria-selected="false">Paralela</button>
               </div>
-              <button type="button" class="btn-hist" id="btn-history" title="Historial y recientes">Historial · Recientes</button>
+              <div class="bible-toolbar-actions">
+                <button type="button" class="btn-xref" id="btn-xref-toolbar" title="Referencias cruzadas (versículo o palabra)">↔ Referencias</button>
+                <button type="button" class="btn-hist" id="btn-history" title="Historial y recientes">Historial · Recientes</button>
+              </div>
             </div>
             <div class="parallel-bar" id="parallel-bar">
               <label>
@@ -1890,6 +2588,8 @@
                 <button type="button" id="btn-to-dict" disabled>→ Diccionario</button>
                 <button type="button" id="btn-to-lex" disabled>→ Léxico</button>
                 <button type="button" id="btn-to-cmt" disabled>→ Comentario</button>
+                <button type="button" id="btn-to-xref" disabled title="Referencias cruzadas por versículo (TSK) o por palabra (concordancia)">↔ Referencias</button>
+                <button type="button" id="btn-eink" disabled title="Vista previa e-ink del versículo (solo en la app)">E-ink</button>
                 <button type="button" id="btn-clear-sel">Limpiar</button>
               </div>
               <div class="hl-bar" id="hl-bar">
@@ -1969,20 +2669,22 @@
 
       <section class="panel" id="panel-temas">
         <div class="themes-intro">
-          Elige un tema visual. Se guarda en este equipo y se aplica a <b>Biblia, Comentario, Diccionario y Léxico</b>.
-          En todos: títulos grandes y subrayados, y las <span class="woc">palabras de Jesús en rojo</span> cuando el módulo las marca.
-          En PC: Comentario / Diccionario / Léxico usan una <b>columna derecha</b> con módulos que tienen contenido (●) para el versículo o lema.
+          Tema de la app — se guarda en este equipo.
         </div>
-        <div class="theme-grid" id="theme-grid"></div>
-        <div class="theme-legend">
-          <b>Formato en todos los temas</b><br/>
-          • Títulos y encabezados: más grandes y <u>subrayados</u><br/>
-          • Solo el <u>número</u> del versículo va subrayado (no todo el texto)<br/>
-          • El <b>primer versículo</b> de cada capítulo se ve un poco más grande<br/>
-          • <span class="woc">Palabras de Jesús</span>: siempre en rojo (si el módulo las marca)<br/>
-          • <b>Resaltados</b>: clic derecho → Resaltar (colores por nombre, se adaptan al tema)<br/>
-          • <b>Subrayar / Copiar / Compartir</b>: mismo menú contextual suave<br/>
-          • Alto contraste para lectura cómoda
+        <div class="theme-grid" id="theme-grid" role="listbox" aria-label="Temas visuales"></div>
+
+        <div class="fonts-section">
+          <h2 class="fonts-section-title">Fuente</h2>
+          <p class="fonts-section-intro">
+            Cada pastilla muestra la tipografía real. Hebreo/griego: siempre Libertinus Serif.
+          </p>
+          <div class="font-grid" id="font-grid" role="listbox" aria-label="Fuente de la app"></div>
+          <div class="font-original-note">
+            <div class="orig-sample" aria-hidden="true">
+              <span class="he script-he">בְּרֵאשִׁית</span>
+              <span class="script-el">Ἐν ἀρχῇ</span>
+            </div>
+          </div>
         </div>
       </section>
     </main>
@@ -2026,6 +2728,61 @@
     </div>
   </div>
 
+  <!-- E-ink verse preview (in-app board mock only — no hardware yet) -->
+  <div class="modal-bg" id="eink-modal" role="dialog" aria-modal="true" aria-labelledby="eink-modal-title">
+    <div class="modal">
+      <header>
+        <h3 id="eink-modal-title">Vista e-ink</h3>
+        <button type="button" id="eink-modal-close">Cerrar</button>
+      </header>
+      <div class="body">
+        <div class="eink-toolbar" role="toolbar" aria-label="Opciones de vista e-ink">
+          <span class="eink-tb-label">Tamaño</span>
+          <button type="button" data-eink-size="sm" id="eink-size-sm" title="Texto pequeño">A</button>
+          <button type="button" data-eink-size="md" id="eink-size-md" class="active" title="Texto mediano">A</button>
+          <button type="button" data-eink-size="lg" id="eink-size-lg" title="Texto grande">A</button>
+          <button type="button" id="eink-copy" title="Copiar versículo + referencia">Copiar</button>
+        </div>
+        <div class="eink-board eink-size-md" id="eink-board" aria-live="polite">
+          <p class="eink-empty" id="eink-empty">Selecciona un versículo para previsualizarlo aquí.</p>
+          <p class="eink-verse-text" id="eink-verse-text" hidden></p>
+          <p class="eink-verse-ref" id="eink-verse-ref" hidden></p>
+          <p class="eink-verse-meta" id="eink-verse-meta" hidden></p>
+        </div>
+        <p class="eink-hint">
+          Vista previa en la app (tarjeta tipo pantalla e-ink). No envía nada a un dispositivo todavía —
+          más adelante se podrá conectar a una placa real.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cross-references (verse TSK + word concordance) -->
+  <div class="modal-bg" id="xref-modal" role="dialog" aria-modal="true" aria-labelledby="xref-modal-title">
+    <div class="modal">
+      <header>
+        <h3 id="xref-modal-title">Referencias cruzadas</h3>
+        <button type="button" id="xref-modal-close">Cerrar</button>
+      </header>
+      <div class="body">
+        <div class="xref-modes" role="tablist" aria-label="Modo de referencias">
+          <button type="button" id="xref-mode-verse" class="active" data-xref-mode="verse" role="tab" aria-selected="true">Por versículo</button>
+          <button type="button" id="xref-mode-word" data-xref-mode="word" role="tab" aria-selected="false">Por palabra</button>
+        </div>
+        <div class="status" id="xref-sub" style="margin-bottom:8px">
+          Selecciona un versículo o una palabra en Biblia.
+        </div>
+        <div class="xref-toolbar" id="xref-toolbar-verse">
+          <label>
+            Módulo (TSK / referencias)
+            <select id="sel-xref-mod" title="Comentario de referencias cruzadas"></select>
+          </label>
+        </div>
+        <div class="xref-list" id="xref-list" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Soft right-click menu (verse / word) -->
   <div id="ctx-menu" role="menu" aria-hidden="true">
     <div class="ctx-header" id="ctx-header">Selección</div>
@@ -2034,6 +2791,9 @@
     </button>
     <button type="button" class="ctx-item" data-action="share" role="menuitem">
       <span class="ctx-ico">↗</span><span class="ctx-label">Compartir</span>
+    </button>
+    <button type="button" class="ctx-item" data-action="eink" role="menuitem">
+      <span class="ctx-ico">▣</span><span class="ctx-label">Vista e-ink</span>
     </button>
     <div class="ctx-sep"></div>
     <button type="button" class="ctx-item" data-action="highlight" role="menuitem" id="ctx-btn-hl">
@@ -2053,6 +2813,10 @@
     </div>
     <button type="button" class="ctx-item" data-action="underline" role="menuitem" id="ctx-btn-ul">
       <span class="ctx-ico">U̲</span><span class="ctx-label">Subrayar</span>
+    </button>
+    <div class="ctx-sep"></div>
+    <button type="button" class="ctx-item" data-action="xref" role="menuitem" id="ctx-btn-xref">
+      <span class="ctx-ico">↔</span><span class="ctx-label">Referencias cruzadas</span>
     </button>
     <div class="ctx-sep"></div>
     <button type="button" class="ctx-item" data-action="clear-marks" role="menuitem">

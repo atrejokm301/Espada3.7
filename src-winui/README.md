@@ -1,4 +1,4 @@
-# Asignación del Cielo — WinUI 3 shell (preview)
+# Espada 3.7 (Windows) — WinUI 3 shell (preview)
 
 Branch experiment: host the existing `ui/index.html` study UI inside a **WinUI 3** window with:
 
