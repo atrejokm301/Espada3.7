@@ -5,14 +5,15 @@ App de estudio bíblico **nativa y offline for Windows** (Tauri 2 + UI en `ui/`)
 > Product name: **Espada 3.7** · Platform: **Windows** · Branch: **`windows`**  
 > Internal crate (for now): `asignacion-del-cielo-bible`
 
-## Multi-platform layout (this repo)
+## Multi-platform layout
 
-| Branch | Platform | Stack |
-|--------|----------|--------|
-| **`main`** | macOS | Espada 3.7 for Apple Silicon (existing) |
-| **`windows`** | Windows | This code — Tauri 2 + WebView2 + e-Sword |
+| Platform | Where | Stack |
+|----------|--------|--------|
+| **macOS** | branch [`main`](https://github.com/atrejokm301/Espada3.7/tree/main) | Espada 3.7 Apple Silicon |
+| **Windows** | branch **`windows`** (this code) | Tauri 2 + WebView2 + e-Sword |
+| **iOS / iPadOS** | [EspadaSwift](https://github.com/atrejokm301/EspadaSwift) | SwiftUI + GRDB |
 
-Repo: [atrejokm301/Espada3.7](https://github.com/atrejokm301/Espada3.7)
+Repo: [atrejokm301/Espada3.7](https://github.com/atrejokm301/Espada3.7) · iOS: [EspadaSwift](https://github.com/atrejokm301/EspadaSwift)
 
 Tabs: **Biblia · Comentario · Diccionario · Léxico**
 
