@@ -4258,6 +4258,17 @@
     renderStudySideRail("dictionary");
   }
 
+  /// Bible text is inflected but dictionary/lexicon headwords are lemmas, so the
+  /// backend retries a clicked word as its likely lemma. Say so — a reader who
+  /// clicked "aborrecen" needs to know these entries are for "aborrecer".
+  function searchedForLabel(rows, term) {
+    var first = rows && rows.length ? rows[0] : null;
+    if (first && first.fallback && first.queryTerm && first.queryTerm !== term) {
+      return "«" + first.queryTerm + "» (buscaste «" + term + "»)";
+    }
+    return "«" + term + "»";
+  }
+
   function runDictionarySearch(term, fillSuggest) {
     if (!state.dict) {
       el("dict-list").innerHTML = '<div class="status">Elige un diccionario en el menú de arriba.</div>';
@@ -4281,8 +4292,9 @@
       state.dictHits = rows || [];
       el("dict-status").textContent =
         state.dictHits.length
-          ? "✓ " + state.dictHits.length + " entrada(s) para «" + term +
-            "» · ES + original arriba · otros módulos a la derecha"
+          ? "✓ " + state.dictHits.length + " entrada(s) para " +
+            searchedForLabel(state.dictHits, term) +
+            " · ES + original arriba · otros módulos a la derecha"
           : "No hay entradas para «" + term + "» en este diccionario. Prueba otro en la columna derecha o ●.";
       if (fillSuggest && state.dictHits.length) {
         openSuggest(state.dictHits.map(function (r) {
@@ -4341,7 +4353,9 @@
       var ms = Date.now() - t0;
       el("lex-status").textContent =
         state.lexHits.length
-          ? "✓ " + state.lexHits.length + " entrada(s) · " + ms + " ms · original + ES arriba · otros a la derecha"
+          ? "✓ " + state.lexHits.length + " entrada(s) para " +
+            searchedForLabel(state.lexHits, term) +
+            " · " + ms + " ms · original + ES arriba · otros a la derecha"
           : "Sin «" + term + "». Prueba H1254 o G26, o otro léxico en la columna derecha.";
       if (fillSuggest && state.lexHits.length) {
         openSuggest(state.lexHits.map(function (r) {

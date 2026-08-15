@@ -200,6 +200,13 @@ pub struct DictionaryResult {
     pub title: String,
     pub definition: String,
     pub module: String,
+    /// The query that actually produced this hit. Differs from what the reader
+    /// clicked when the lemma fallback fired ("aborrecen" -> "aborrecer").
+    #[serde(default)]
+    pub query_term: String,
+    /// True when `query_term` is a guessed lemma rather than the typed word.
+    #[serde(default)]
+    pub fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -210,6 +217,10 @@ pub struct LexiconResult {
     pub title: String,
     pub definition: String,
     pub module: String,
+    #[serde(default)]
+    pub query_term: String,
+    #[serde(default)]
+    pub fallback: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -676,6 +687,20 @@ pub fn probe_dictionary_fast(module_path: &str, term: &str) -> ContentProbe {
                 }
             }
         }
+        // Same lemma fallback as `lookup_dictionary`, or the ● markers would
+        // stay dark for exactly the inflected words the fallback exists to
+        // rescue. Capped tighter: this runs once per installed dictionary.
+        for cand in lemma_candidates(term).into_iter().take(MAX_PROBE_CANDIDATES) {
+            for pat in dict_exact_patterns(&cand) {
+                if let Ok(mut stmt) =
+                    conn.prepare("SELECT 1 FROM Dictionary WHERE Topic = ?1 LIMIT 1")
+                {
+                    if stmt.query_row([&pat], |_| Ok(1i32)).is_ok() {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
         Ok(false)
     });
     match res {
@@ -724,6 +749,20 @@ pub fn probe_lexicon_fast(module_path: &str, term: &str) -> ContentProbe {
                 .is_ok()
             {
                 return Ok(true);
+            }
+        }
+        // Word-shaped queries get the lemma fallback; a Strong's code does not,
+        // since guessing lemmas from "G26" is meaningless.
+        if normalize_strongs(term).is_none() {
+            let exact = format!("SELECT 1 FROM [{table}] WHERE Topic = ?1 LIMIT 1");
+            for cand in lemma_candidates(term).into_iter().take(MAX_PROBE_CANDIDATES) {
+                for pat in dict_exact_patterns(&cand) {
+                    if let Ok(mut stmt) = conn.prepare(&exact) {
+                        if stmt.query_row([&pat], |_| Ok(1i32)).is_ok() {
+                            return Ok(true);
+                        }
+                    }
+                }
             }
         }
         Ok(false)
@@ -1014,10 +1053,67 @@ pub fn search_commentaries(
 /// Dictionary lookup like e-Sword entry browse / a real dictionary:
 /// match **headwords (Topic)** only — never scan definition bodies.
 /// Order: exact title → prefix (starts with) → optional whole-word-in-title for longer queries.
+/// How many guessed lemmas to try before giving up. The list is ordered by
+/// confidence, so the useful ones are at the front.
+const MAX_FALLBACK_CANDIDATES: usize = 14;
+
+/// Tighter cap for the ● probes, which run once per installed module.
+const MAX_PROBE_CANDIDATES: usize = 8;
+
 pub fn lookup_dictionary(
     module_path: &str,
     term: &str,
     limit: i32,
+) -> Result<Vec<DictionaryResult>, String> {
+    let mut hits = lookup_dictionary_inner(module_path, term, limit, false)?;
+    if !hits.is_empty() {
+        for h in &mut hits {
+            h.query_term = term.trim().to_string();
+        }
+        return Ok(hits);
+    }
+
+    // Bible text is inflected, dictionary topics are lemmas. Try the plausible
+    // headwords for this word, exact-match only so a bad guess finds nothing
+    // rather than something wrong.
+    for cand in lemma_candidates(term)
+        .into_iter()
+        .take(MAX_FALLBACK_CANDIDATES)
+    {
+        let got = lookup_dictionary_inner(module_path, &cand, limit, true)?;
+        if !got.is_empty() {
+            return Ok(got
+                .into_iter()
+                .map(|mut r| {
+                    r.query_term = cand.clone();
+                    r.fallback = true;
+                    r
+                })
+                .collect());
+        }
+    }
+    Ok(vec![])
+}
+
+/// Exact-headword-only lookup.
+///
+/// Used for *guessed* terms (see [`lemma_candidates`]). A guess has to land on
+/// a real headword to count — allowing the prefix and contains phases lets a
+/// bad stem like "algar" match "ALGARROBA" and report a confident hit for
+/// "alguno", which is worse than finding nothing.
+pub fn lookup_dictionary_exact(
+    module_path: &str,
+    term: &str,
+    limit: i32,
+) -> Result<Vec<DictionaryResult>, String> {
+    lookup_dictionary_inner(module_path, term, limit, true)
+}
+
+fn lookup_dictionary_inner(
+    module_path: &str,
+    term: &str,
+    limit: i32,
+    exact_only: bool,
 ) -> Result<Vec<DictionaryResult>, String> {
     let path = PathBuf::from(module_path);
     let term = term.trim();
@@ -1057,7 +1153,7 @@ pub fn lookup_dictionary(
         }
 
         // Phase B: prefix — "DIOS%" finds "DIOS", "DIOS DE ISRAEL", not "AMOR DE DIOS"
-        if (ranked.len() as i32) < limit {
+        if !exact_only && (ranked.len() as i32) < limit {
             for pat in dict_prefix_patterns(term) {
                 push_dict_rows(
                     conn,
@@ -1078,7 +1174,7 @@ pub fn lookup_dictionary(
         // Phase C (optional, longer terms only): Topic contains as a whole token,
         // e.g. "DE DIOS" inside "HIJO DE DIOS". Still Topic-only — never Definition.
         // Skipped for very short queries to avoid flooding ("de", "el", "luz" noise).
-        if (ranked.len() as i32) < limit && term_norm.chars().count() >= 4 {
+        if !exact_only && (ranked.len() as i32) < limit && term_norm.chars().count() >= 4 {
             for pat in dict_contains_patterns(term) {
                 push_dict_rows(
                     conn,
@@ -1214,6 +1310,8 @@ fn push_dict_rows(
                 title: title.to_string(),
                 definition: truncate(&definition, MAX_TEXT),
                 module: module_name.to_string(),
+                query_term: String::new(),
+                fallback: false,
             },
         ));
     }
@@ -1262,8 +1360,48 @@ pub fn list_dictionary_topics(
     lookup_dictionary(module_path, term, limit)
 }
 
-/// Léxico: Strong’s exacto primero (rápido). Sin escaneo pesado de definiciones.
+/// Léxico with the same lemma fallback as the dictionary.
+///
+/// A lexicon is keyed by Strong's number, but the reader may well arrive with a
+/// Spanish word and no Strong's — the interlinear only resolves about half of
+/// them — so an inflected Spanish query has to reach the headword too.
 pub fn lookup_lexicon(
+    module_path: &str,
+    term: &str,
+    limit: i32,
+) -> Result<Vec<LexiconResult>, String> {
+    let mut hits = lookup_lexicon_inner(module_path, term, limit)?;
+    if !hits.is_empty() {
+        for h in &mut hits {
+            h.query_term = term.trim().to_string();
+        }
+        return Ok(hits);
+    }
+    // A Strong's code either exists or it does not; guessing lemmas off it is
+    // meaningless, so only fall back for word-shaped queries.
+    if normalize_strongs(term).is_some() {
+        return Ok(vec![]);
+    }
+    for cand in lemma_candidates(term)
+        .into_iter()
+        .take(MAX_FALLBACK_CANDIDATES)
+    {
+        let got = lookup_lexicon_inner(module_path, &cand, limit)?;
+        if !got.is_empty() {
+            return Ok(got
+                .into_iter()
+                .map(|mut r| {
+                    r.query_term = cand.clone();
+                    r.fallback = true;
+                    r
+                })
+                .collect());
+        }
+    }
+    Ok(vec![])
+}
+
+fn lookup_lexicon_inner(
     module_path: &str,
     term: &str,
     limit: i32,
@@ -1340,6 +1478,8 @@ pub fn lookup_lexicon(
                                 title: title.clone(),
                                 definition: truncate(&definition, MAX_TEXT),
                                 module: module_name.clone(),
+                                query_term: String::new(),
+                                fallback: false,
                             });
                         }
                     }
@@ -1380,6 +1520,8 @@ pub fn lookup_lexicon(
                                     title: title.clone(),
                                     definition: truncate(&definition, MAX_TEXT),
                                     module: module_name.clone(),
+                                    query_term: String::new(),
+                                    fallback: false,
                                 });
                             }
                             if out.len() as i32 >= limit {
@@ -1548,6 +1690,142 @@ fn strip_accents(s: &str) -> String {
             other => other,
         })
         .collect()
+}
+
+/// Candidate dictionary headwords for an inflected Spanish word.
+///
+/// This is deliberately *not* a lemmatizer. It generates a short, ordered list
+/// of plausible headwords and lets the dictionary itself be the oracle — a
+/// wrong guess simply finds nothing, so precision costs nothing while recall
+/// goes up. Bible text is inflected ("aborrecen", "abriendo", "alcanzarán")
+/// while dictionary topics are lemmas ("aborrecer", "abrir", "alcanzar"), and
+/// that mismatch is the single largest reason a clicked word finds no entry.
+pub fn lemma_candidates(word: &str) -> Vec<String> {
+    let w = word.trim().to_lowercase();
+    let n = w.chars().count();
+    if n < 3 {
+        return vec![];
+    }
+    let chars: Vec<char> = w.chars().collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |s: String| {
+        if s.chars().count() >= 3 && !out.contains(&s) {
+            out.push(s);
+        }
+    };
+
+    // Accents are dropped in some headword sets and kept in others.
+    let bare = strip_accents(&w.to_uppercase()).to_lowercase();
+    if bare != w {
+        push(bare.clone());
+    }
+
+    // Plurals: luces -> luz, mujeres -> mujer, hijos -> hijo
+    if w.ends_with("ces") && n > 4 {
+        push(format!("{}z", chars[..n - 3].iter().collect::<String>()));
+    }
+    if w.ends_with("es") && n > 4 {
+        push(chars[..n - 2].iter().collect::<String>());
+    }
+    if w.ends_with('s') && n > 3 {
+        push(chars[..n - 1].iter().collect::<String>());
+    }
+
+    // High-precision endings first: participles and gerunds map cleanly back to
+    // an infinitive, so these are tried before any generic stemming.
+    const SHAPED: &[(&str, &[&str])] = &[
+        ("ando", &["ar"]),
+        ("iendo", &["er", "ir"]),
+        ("yendo", &["er", "ir"]),
+        ("ados", &["ar"]),
+        ("adas", &["ar"]),
+        ("ado", &["ar"]),
+        ("ada", &["ar"]),
+        ("idos", &["er", "ir"]),
+        ("idas", &["er", "ir"]),
+        ("ido", &["er", "ir"]),
+        ("ida", &["er", "ir"]),
+    ];
+    for (suffix, endings) in SHAPED {
+        if let Some(stem) = w.strip_suffix(suffix) {
+            if stem.chars().count() >= 2 {
+                for e in *endings {
+                    push(format!("{stem}{e}"));
+                }
+            }
+        }
+    }
+
+    // Ordering matters: callers cap how many candidates they try, so the
+    // high-confidence ones have to come first. Peeling one character off
+    // "alcanzarán" yields the junk stem "alcanzará"; peeling two yields the
+    // answer. So sweep every cut for stems that are *already* infinitives
+    // before generating any stem+ending combinations.
+    let stems: Vec<String> = (1..=5usize)
+        .take_while(|cut| n > cut + 2)
+        .flat_map(|cut| {
+            let raw: String = chars[..n - cut].iter().collect();
+            let bare = strip_accents(&raw.to_uppercase()).to_lowercase();
+            if bare == raw {
+                vec![raw]
+            } else {
+                vec![raw, bare]
+            }
+        })
+        .collect();
+
+    for stem in &stems {
+        if stem.ends_with("ar") || stem.ends_with("er") || stem.ends_with("ir") {
+            push(stem.clone());
+        }
+    }
+
+    // Then restore an infinitive from the stem: acercó -> acerc + ar. Five
+    // characters is enough to reach "abr" in "abriendo". Aggressive on
+    // purpose — callers match these exactly, so a nonsense stem finds nothing
+    // instead of matching something wrong.
+    //
+    // Consonant-final stems go first: Spanish verb stems end in a consonant
+    // (alegr-, aborrec-, abr-), so a vowel-final stem like "alegrao" only ever
+    // yields junk. Letting it queue ahead pushed the real answer past the
+    // caller's candidate cap.
+    let is_consonant_final = |s: &String| {
+        s.chars()
+            .last()
+            .map(|c| !matches!(c, 'a' | 'e' | 'i' | 'o' | 'u' | 'á' | 'é' | 'í' | 'ó' | 'ú'))
+            .unwrap_or(false)
+    };
+    let ordered: Vec<&String> = stems
+        .iter()
+        .filter(|s| is_consonant_final(s))
+        .chain(stems.iter().filter(|s| !is_consonant_final(s)))
+        .collect();
+
+    for stem in ordered {
+        // Spelling shifts that preserve the sound: busqué -> buscar,
+        // pagué -> pagar, empecé -> empezar.
+        let fixed = if let Some(p) = stem.strip_suffix("qu") {
+            format!("{p}c")
+        } else if let Some(p) = stem.strip_suffix("gu") {
+            format!("{p}g")
+        } else if let Some(p) = stem.strip_suffix('c') {
+            format!("{p}z")
+        } else {
+            stem.clone()
+        };
+        for ending in ["ar", "er", "ir"] {
+            push(format!("{stem}{ending}"));
+            if &fixed != stem {
+                push(format!("{fixed}{ending}"));
+            }
+        }
+    }
+
+    // Adjective / participle gender: santos -> santo -> santa
+    if w.ends_with('o') && n > 3 {
+        push(format!("{}a", chars[..n - 1].iter().collect::<String>()));
+    }
+    out
 }
 
 fn normalize_strongs(term: &str) -> Option<String> {
@@ -2167,6 +2445,461 @@ pub fn get_devotional(
             module,
         }))
     })
+}
+
+#[cfg(test)]
+mod lemma_tests {
+    use super::*;
+
+    fn first_n(word: &str, n: usize) -> Vec<String> {
+        lemma_candidates(word).into_iter().take(n).collect()
+    }
+
+    #[test]
+    fn inflected_verbs_reach_their_infinitive_early() {
+        // Each of these must appear inside the probe cap, not just somewhere in
+        // the list — the ● sweep only tries the first few.
+        let cases = [
+            ("aborrecen", "aborrecer"),
+            ("aborrecerás", "aborrecer"),
+            ("abriendo", "abrir"),
+            ("acercó", "acercar"),
+            ("alcanzarán", "alcanzar"),
+            ("alegraos", "alegrar"),
+            ("amaron", "amar"),
+            ("andamos", "andar"),
+            ("bendecid", "bendecir"),
+            ("clamamos", "clamar"),
+        ];
+        for (inflected, lemma) in cases {
+            let got = first_n(inflected, MAX_PROBE_CANDIDATES);
+            assert!(
+                got.iter().any(|c| c == lemma),
+                "{inflected} -> {lemma} not in first {MAX_PROBE_CANDIDATES}: {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn plurals_and_gender_reduce() {
+        for (word, want) in [
+            ("ajenos", "ajeno"),
+            ("antiguos", "antiguo"),
+            ("celestiales", "celestial"),
+            ("luces", "luz"),
+        ] {
+            let got = lemma_candidates(word);
+            assert!(got.contains(&want.to_string()), "{word} -> {want}: {got:?}");
+        }
+    }
+
+    #[test]
+    fn candidates_stay_bounded_and_sane() {
+        for word in ["aborrecerías", "constantinopla", "a", "de", "yo"] {
+            let got = lemma_candidates(word);
+            assert!(got.len() <= 60, "{word} produced {} candidates", got.len());
+            for c in &got {
+                assert!(c.chars().count() >= 3, "{word} produced short {c:?}");
+                assert!(!c.contains(' '), "{word} produced spaced {c:?}");
+            }
+        }
+        // Too short to inflect meaningfully.
+        assert!(lemma_candidates("de").is_empty());
+    }
+
+    #[test]
+    fn strongs_codes_never_take_the_lemma_path() {
+        // Guessing lemmas off "G26" is meaningless; lookup must not try.
+        assert!(normalize_strongs("G26").is_some());
+        assert!(normalize_strongs("H1254").is_some());
+        assert!(normalize_strongs("aborrecen").is_none());
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+    use crate::esword::scan_modules;
+
+    fn dictionaries() -> Vec<String> {
+        scan_modules(None)
+            .map(|all| {
+                all.into_iter()
+                    .filter(|m| m.module_type == "dictionary" && !m.encrypted)
+                    .map(|m| m.path)
+                    .take(30)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn fallback_is_reported_and_direct_hits_are_not() {
+        let dicts = dictionaries();
+        if dicts.is_empty() {
+            eprintln!("skip: library not installed");
+            return;
+        }
+        // A direct hit must never be labelled a fallback.
+        let mut checked_direct = false;
+        for d in &dicts {
+            if let Ok(rows) = lookup_dictionary(d, "Dios", 3) {
+                if let Some(r) = rows.first() {
+                    assert!(!r.fallback, "direct hit marked as fallback in {d}");
+                    assert_eq!(r.query_term, "Dios");
+                    checked_direct = true;
+                    break;
+                }
+            }
+        }
+        assert!(checked_direct, "no dictionary had an entry for Dios");
+
+        // An inflected word that resolves must say which lemma it used.
+        let mut checked_fallback = false;
+        for d in &dicts {
+            if let Ok(rows) = lookup_dictionary(d, "aborrecen", 3) {
+                if let Some(r) = rows.first() {
+                    assert!(r.fallback, "expected fallback flag for aborrecen in {d}");
+                    assert_eq!(r.query_term, "aborrecer");
+                    assert_ne!(r.query_term, "aborrecen");
+                    checked_fallback = true;
+                    break;
+                }
+            }
+        }
+        assert!(checked_fallback, "aborrecen resolved in no dictionary");
+    }
+
+    #[test]
+    fn nonsense_words_stay_empty() {
+        // The fallback must not manufacture hits out of junk.
+        for d in dictionaries().iter().take(15) {
+            for junk in ["zzzznotaword", "qwertyuiop", "xyzzyxx"] {
+                let rows = lookup_dictionary(d, junk, 3).unwrap_or_default();
+                assert!(rows.is_empty(), "{junk} matched in {d}: {:?}", rows[0].term);
+                assert!(!probe_dictionary(d, junk).has_content);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod sync_audit {
+    //! Measures how often clicking a word in the Bible actually lands somewhere
+    //! in the dictionaries and lexicons. Run with:
+    //!   cargo test --lib -- --ignored sync_audit --nocapture
+    use super::*;
+    use crate::esword::scan_modules;
+
+    fn modules_of(kind: &str) -> Vec<crate::esword::ModuleInfo> {
+        scan_modules(None)
+            .map(|all| {
+                all.into_iter()
+                    .filter(|m| m.module_type == kind && !m.encrypted)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn pick(mods: &[crate::esword::ModuleInfo], needles: &[&str]) -> Option<String> {
+        for needle in needles {
+            if let Some(m) = mods
+                .iter()
+                .find(|m| m.filename.to_lowercase().contains(needle))
+            {
+                return Some(m.path.clone());
+            }
+        }
+        mods.first().map(|m| m.path.clone())
+    }
+
+    /// Words as a reader would click them: letters only, no Strong's numbers.
+    fn words_of(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        for c in text.chars() {
+            if c.is_alphabetic() {
+                cur.push(c);
+            } else {
+                if cur.chars().count() >= 3 {
+                    out.push(cur.to_lowercase());
+                }
+                cur.clear();
+            }
+        }
+        if cur.chars().count() >= 3 {
+            out.push(cur.to_lowercase());
+        }
+        out
+    }
+
+    #[test]
+    #[ignore = "audit: needs the installed e-Sword library"]
+    fn dictionary_hit_rate_for_real_bible_words() {
+        let bibles = modules_of("bible");
+        let dicts = modules_of("dictionary");
+        if bibles.is_empty() || dicts.is_empty() {
+            eprintln!("skip: library not installed");
+            return;
+        }
+        let bible = pick(&bibles, &["rvr1960", "rv1960", "lbla"]).expect("bible");
+        // A spread of narrative, poetry, law, gospel and epistle.
+        let passages: &[(i32, i32)] = &[(1, 1), (2, 20), (19, 23), (23, 55), (40, 5), (43, 3), (45, 8)];
+
+        let mut vocab: Vec<String> = Vec::new();
+        for (book, chapter) in passages {
+            if let Ok(res) = get_chapter(&bible, *book, *chapter) {
+                for v in res.verses {
+                    vocab.extend(words_of(&v.text));
+                }
+            }
+        }
+        vocab.sort();
+        vocab.dedup();
+        assert!(!vocab.is_empty(), "no vocabulary extracted");
+
+        let probe: Vec<String> = dicts
+            .iter()
+            .take(6)
+            .map(|m| m.path.clone())
+            .collect();
+
+        let mut hit = 0usize;
+        let mut misses: Vec<String> = Vec::new();
+        for word in &vocab {
+            let found = probe.iter().any(|d| {
+                lookup_dictionary(d, word, 3)
+                    .map(|r| !r.is_empty())
+                    .unwrap_or(false)
+            });
+            if found {
+                hit += 1;
+            } else {
+                misses.push(word.clone());
+            }
+        }
+        eprintln!(
+            "\nvocabulary: {} unique words over {} passages, {} dictionaries probed",
+            vocab.len(),
+            passages.len(),
+            probe.len()
+        );
+        eprintln!(
+            "dictionary hit: {hit}/{}  ({:.1}%)   miss: {}",
+            vocab.len(),
+            100.0 * hit as f64 / vocab.len() as f64,
+            misses.len()
+        );
+        eprintln!("\nfirst 40 misses:");
+        for m in misses.iter().take(40) {
+            eprint!("{m}  ");
+        }
+        eprintln!();
+
+        // Q1: is this a coverage problem? Widen to many more dictionaries.
+        let wide: Vec<String> = dicts.iter().take(30).map(|m| m.path.clone()).collect();
+        let mut wide_recover = 0usize;
+        let mut still: Vec<String> = Vec::new();
+        for word in &misses {
+            let found = wide.iter().any(|d| {
+                lookup_dictionary(d, word, 3)
+                    .map(|r| !r.is_empty())
+                    .unwrap_or(false)
+            });
+            if found {
+                wide_recover += 1;
+            } else {
+                still.push(word.clone());
+            }
+        }
+        eprintln!(
+            "\nQ1 widen 6 -> 30 dictionaries: recovers {wide_recover} of {} misses ({} still missing)",
+            misses.len(),
+            still.len()
+        );
+
+        // Q2: is this a word-form problem? Try morphological candidates.
+        // Narrower dictionary set here — candidates multiply the query count.
+        let wide: Vec<String> = wide.into_iter().take(10).collect();
+        let mut lemma_recover = 0usize;
+        let mut examples: Vec<(String, String)> = Vec::new();
+        let mut hopeless: Vec<String> = Vec::new();
+        for word in &still {
+            let mut got: Option<String> = None;
+            for cand in lemma_candidates(word) {
+                if wide.iter().any(|d| {
+                    lookup_dictionary_exact(d, &cand, 3)
+                        .map(|r| !r.is_empty())
+                        .unwrap_or(false)
+                }) {
+                    got = Some(cand);
+                    break;
+                }
+            }
+            match got {
+                Some(c) => {
+                    lemma_recover += 1;
+                    if examples.len() < 25 {
+                        examples.push((word.clone(), c));
+                    }
+                }
+                None => hopeless.push(word.clone()),
+            }
+        }
+        eprintln!(
+            "Q2 lemma candidates: recovers {lemma_recover} of the remaining {} ({} truly absent)",
+            still.len(),
+            hopeless.len()
+        );
+        eprintln!("\n  recovered examples:");
+        for (w, c) in &examples {
+            eprintln!("    {w:<16} -> {c}");
+        }
+        eprintln!("\n  still absent (first 30):");
+        for w in hopeless.iter().take(30) {
+            eprint!("{w}  ");
+        }
+        eprintln!();
+
+        let final_hit = hit + wide_recover + lemma_recover;
+        eprintln!(
+            "\nPROJECTED hit rate: {final_hit}/{} ({:.1}%)  — from {:.1}%",
+            vocab.len(),
+            100.0 * final_hit as f64 / vocab.len() as f64,
+            100.0 * hit as f64 / vocab.len() as f64
+        );
+    }
+
+    /// Same vocabulary, measured through the shipping `lookup_dictionary`
+    /// (fallback included) plus the cost of a full ● sweep.
+    #[test]
+    #[ignore = "audit: needs the installed e-Sword library"]
+    fn hit_rate_and_probe_cost_after_fallback() {
+        use std::time::Instant;
+        let bibles = modules_of("bible");
+        let dicts = modules_of("dictionary");
+        if bibles.is_empty() || dicts.is_empty() {
+            eprintln!("skip: library not installed");
+            return;
+        }
+        let bible = pick(&bibles, &["rvr1960", "rv1960", "lbla"]).expect("bible");
+        let passages: &[(i32, i32)] = &[(1, 1), (2, 20), (19, 23), (23, 55), (40, 5), (43, 3), (45, 8)];
+        let mut vocab: Vec<String> = Vec::new();
+        for (book, chapter) in passages {
+            if let Ok(res) = get_chapter(&bible, *book, *chapter) {
+                for v in res.verses {
+                    vocab.extend(words_of(&v.text));
+                }
+            }
+        }
+        vocab.sort();
+        vocab.dedup();
+
+        for n in [6usize, 30] {
+            let probe: Vec<String> = dicts.iter().take(n).map(|m| m.path.clone()).collect();
+            let t = Instant::now();
+            let mut hit = 0usize;
+            let mut via_fallback = 0usize;
+            for word in &vocab {
+                let mut found = false;
+                let mut fb = false;
+                for d in &probe {
+                    if let Ok(rows) = lookup_dictionary(d, word, 3) {
+                        if let Some(first) = rows.first() {
+                            found = true;
+                            fb = first.fallback;
+                            break;
+                        }
+                    }
+                }
+                if found {
+                    hit += 1;
+                    if fb {
+                        via_fallback += 1;
+                    }
+                }
+            }
+            eprintln!(
+                "{n:>3} dictionaries: hit {hit}/{} ({:.1}%)  of which {via_fallback} via lemma fallback  [{} ms]",
+                vocab.len(),
+                100.0 * hit as f64 / vocab.len() as f64,
+                t.elapsed().as_millis()
+            );
+        }
+
+        // Cost of one click: the ● sweep across every installed dictionary,
+        // for a word that only the fallback can resolve.
+        let all: Vec<String> = dicts.iter().map(|m| m.path.clone()).collect();
+        for word in ["dios", "aborrecen", "abriendo", "alcanzarán", "zzzznotaword"] {
+            // Old behaviour: exact/prefix/contains on the literal word only.
+            let before = all
+                .iter()
+                .filter(|d| {
+                    lookup_dictionary_inner(d, word, 1, false)
+                        .map(|r| !r.is_empty())
+                        .unwrap_or(false)
+                })
+                .count();
+            let t = Instant::now();
+            let after = all
+                .iter()
+                .filter(|d| probe_dictionary(d, word).has_content)
+                .count();
+            eprintln!(
+                "● sweep {:>13}: {before:>3} -> {after:>3} of {} dictionaries  [{} ms]",
+                word,
+                all.len(),
+                t.elapsed().as_millis()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "audit: needs the installed e-Sword library"]
+    fn strongs_resolution_rate() {
+        let bibles = modules_of("bible");
+        if bibles.is_empty() {
+            eprintln!("skip: library not installed");
+            return;
+        }
+        let bible = pick(&bibles, &["rvr1960", "rv1960"]).expect("bible");
+        let interlinears: Vec<String> = bibles
+            .iter()
+            .filter(|m| {
+                let n = m.filename.to_lowercase();
+                n.contains("interlineal") || n.contains("irv") || n.contains("int")
+            })
+            .map(|m| m.path.clone())
+            .collect();
+        eprintln!("\ninterlinear modules found: {}", interlinears.len());
+        for p in interlinears.iter().take(5) {
+            eprintln!("  {p}");
+        }
+        if interlinears.is_empty() {
+            eprintln!("no interlinear -> lexicon can never be reached from a Spanish word");
+            return;
+        }
+
+        let Ok(res) = get_chapter(&bible, 43, 3) else {
+            eprintln!("skip: could not read John 3");
+            return;
+        };
+        let mut total = 0usize;
+        let mut resolved = 0usize;
+        for v in res.verses.iter().take(20) {
+            for (i, w) in words_of(&v.text).iter().enumerate() {
+                total += 1;
+                let got = resolve_word_strongs(43, 3, v.verse, w, i as i32, &interlinears);
+                if got.map(|r| !r.hits.is_empty()).unwrap_or(false) {
+                    resolved += 1;
+                }
+            }
+        }
+        eprintln!(
+            "Strong's resolved for {resolved}/{total} words in John 3 ({:.1}%)",
+            100.0 * resolved as f64 / total.max(1) as f64
+        );
+    }
 }
 
 #[cfg(test)]
