@@ -1246,131 +1246,6 @@
       padding: 16px 8px; text-align: center; color: var(--muted); font-size: 13px;
     }
 
-    /* In-app e-ink verse preview (app-side only — not hardware / not full-app chrome) */
-    #eink-modal .modal {
-      width: min(440px, 100%);
-      max-height: 88vh;
-      background: #e8e4d9;
-      border-color: #1a1a1a;
-    }
-    #eink-modal .modal header {
-      background: #ddd8cc;
-      border-bottom-color: #c4bfb0;
-    }
-    #eink-modal .modal header h3 {
-      color: #1a1a1a;
-      text-decoration: none;
-    }
-    #eink-modal .modal header button,
-    #eink-modal .eink-toolbar button {
-      background: #f4f1e8;
-      color: #1a1a1a;
-      border-color: #8a8578;
-    }
-    #eink-modal .modal header button:hover,
-    #eink-modal .eink-toolbar button:hover {
-      border-color: #1a1a1a;
-      color: #000;
-    }
-    #eink-modal .eink-toolbar button.active {
-      background: #1a1a1a;
-      color: #f4f1e8;
-      border-color: #1a1a1a;
-      font-weight: 600;
-    }
-    #eink-modal .body {
-      background: #e8e4d9;
-      color: #1a1a1a;
-    }
-    .eink-toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      align-items: center;
-      margin-bottom: 12px;
-      font-size: 12px;
-      color: #4a463c;
-    }
-    .eink-toolbar .eink-tb-label {
-      margin-right: 2px;
-      color: #5c564a;
-    }
-    .eink-board {
-      /* Physical-board-ish card inside the modal — not a full-screen takeover */
-      width: 100%;
-      min-height: 220px;
-      max-height: min(52vh, 360px);
-      margin: 0 auto;
-      padding: 28px 24px 22px;
-      box-sizing: border-box;
-      border: 3px solid #2a2a2a;
-      border-radius: 6px;
-      background: #f7f4ea;
-      box-shadow:
-        inset 0 0 0 1px #cfc9b8,
-        0 2px 0 #9a9588;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 16px;
-      overflow: auto;
-    }
-    .eink-board.eink-size-sm .eink-verse-text { font-size: 1.05rem; line-height: 1.55; }
-    .eink-board.eink-size-md .eink-verse-text { font-size: 1.35rem; line-height: 1.5; }
-    .eink-board.eink-size-lg .eink-verse-text { font-size: 1.7rem; line-height: 1.45; }
-    .eink-verse-text {
-      margin: 0;
-      color: #0d0d0d;
-      font-weight: 500;
-      letter-spacing: 0.01em;
-      text-align: left;
-      font-family: "Segoe UI", "Georgia", "Times New Roman", serif;
-    }
-    .eink-verse-ref {
-      margin: 0;
-      color: #1a1a1a;
-      font-size: 0.92rem;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-      text-align: right;
-      border-top: 1px solid #bdb7a6;
-      padding-top: 12px;
-      font-family: "Segoe UI", system-ui, sans-serif;
-    }
-    .eink-verse-meta {
-      margin: 0;
-      font-size: 11px;
-      color: #5c564a;
-      text-align: right;
-      font-family: "Segoe UI", system-ui, sans-serif;
-    }
-    .eink-empty {
-      margin: 0;
-      color: #5c564a;
-      font-size: 14px;
-      text-align: center;
-      line-height: 1.5;
-    }
-    .eink-hint {
-      margin: 10px 0 0;
-      font-size: 11px;
-      color: #5c564a;
-      line-height: 1.4;
-    }
-    .sel-tools #btn-eink {
-      border-color: #8a8578;
-      color: #2a2a2a;
-      background: #f0ebe0;
-      font-weight: 600;
-    }
-    .sel-tools #btn-eink:disabled {
-      opacity: 0.45;
-      border-color: var(--border);
-      color: var(--muted);
-      background: transparent;
-      font-weight: 500;
-    }
-
     /* Themes + fonts: modern compact pills (not giant cards) */
     #panel-temas.panel.active {
       display: block;
@@ -2602,7 +2477,6 @@
                 <button type="button" id="btn-to-lex" disabled>→ Léxico</button>
                 <button type="button" id="btn-to-cmt" disabled>→ Comentario</button>
                 <button type="button" id="btn-to-xref" disabled title="Referencias cruzadas por versículo (TSK) o por palabra (concordancia)">↔ Referencias</button>
-                <button type="button" id="btn-eink" disabled title="Vista previa e-ink del versículo (solo en la app)">E-ink</button>
                 <button type="button" id="btn-clear-sel">Limpiar</button>
               </div>
               <div class="hl-bar" id="hl-bar">
@@ -2741,35 +2615,6 @@
     </div>
   </div>
 
-  <!-- E-ink verse preview (in-app board mock only — no hardware yet) -->
-  <div class="modal-bg" id="eink-modal" role="dialog" aria-modal="true" aria-labelledby="eink-modal-title">
-    <div class="modal">
-      <header>
-        <h3 id="eink-modal-title">Vista e-ink</h3>
-        <button type="button" id="eink-modal-close">Cerrar</button>
-      </header>
-      <div class="body">
-        <div class="eink-toolbar" role="toolbar" aria-label="Opciones de vista e-ink">
-          <span class="eink-tb-label">Tamaño</span>
-          <button type="button" data-eink-size="sm" id="eink-size-sm" title="Texto pequeño">A</button>
-          <button type="button" data-eink-size="md" id="eink-size-md" class="active" title="Texto mediano">A</button>
-          <button type="button" data-eink-size="lg" id="eink-size-lg" title="Texto grande">A</button>
-          <button type="button" id="eink-copy" title="Copiar versículo + referencia">Copiar</button>
-        </div>
-        <div class="eink-board eink-size-md" id="eink-board" aria-live="polite">
-          <p class="eink-empty" id="eink-empty">Selecciona un versículo para previsualizarlo aquí.</p>
-          <p class="eink-verse-text" id="eink-verse-text" hidden></p>
-          <p class="eink-verse-ref" id="eink-verse-ref" hidden></p>
-          <p class="eink-verse-meta" id="eink-verse-meta" hidden></p>
-        </div>
-        <p class="eink-hint">
-          Vista previa en la app (tarjeta tipo pantalla e-ink). No envía nada a un dispositivo todavía —
-          más adelante se podrá conectar a una placa real.
-        </p>
-      </div>
-    </div>
-  </div>
-
   <!-- Cross-references (verse TSK + word concordance) -->
   <div class="modal-bg" id="xref-modal" role="dialog" aria-modal="true" aria-labelledby="xref-modal-title">
     <div class="modal">
@@ -2804,9 +2649,6 @@
     </button>
     <button type="button" class="ctx-item" data-action="share" role="menuitem">
       <span class="ctx-ico">↗</span><span class="ctx-label">Compartir</span>
-    </button>
-    <button type="button" class="ctx-item" data-action="eink" role="menuitem">
-      <span class="ctx-ico">▣</span><span class="ctx-label">Vista e-ink</span>
     </button>
     <div class="ctx-sep"></div>
     <button type="button" class="ctx-item" data-action="highlight" role="menuitem" id="ctx-btn-hl">

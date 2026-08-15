@@ -477,88 +477,6 @@
     return copyTextToClipboard(payload.text);
   }
 
-  /* ---------- In-app e-ink verse preview (no hardware) ---------- */
-  var einkState = { size: "md" };
-
-  function einkPayload() {
-    var bm = bookMeta();
-    var ref = bm.name + " " + state.chapter;
-    if (state.selectedVerse != null) ref += ":" + state.selectedVerse;
-    var bible = state.bible
-      ? (state.bible.abbreviation || state.bible.filename || "")
-      : "";
-    var body = "";
-    if (state.selectedVerse != null) {
-      body = getVersePlainText(state.selectedVerse);
-    }
-    return {
-      ref: ref,
-      body: body,
-      bible: bible,
-      text: (body ? body + "\n\n— " : "") + ref + (bible ? " (" + bible + ")" : "")
-    };
-  }
-
-  function refreshEinkPreview() {
-    var board = el("eink-board");
-    var empty = el("eink-empty");
-    var textEl = el("eink-verse-text");
-    var refEl = el("eink-verse-ref");
-    var metaEl = el("eink-verse-meta");
-    var copyBtn = el("eink-copy");
-    if (!board || !textEl || !refEl) return;
-
-    board.classList.remove("eink-size-sm", "eink-size-md", "eink-size-lg");
-    board.classList.add("eink-size-" + (einkState.size || "md"));
-
-    var sizeBtns = document.querySelectorAll("[data-eink-size]");
-    for (var i = 0; i < sizeBtns.length; i++) {
-      var sz = sizeBtns[i].getAttribute("data-eink-size");
-      if (sz === einkState.size) sizeBtns[i].classList.add("active");
-      else sizeBtns[i].classList.remove("active");
-    }
-
-    var p = einkPayload();
-    var hasVerse = state.selectedVerse != null && p.body;
-    if (empty) empty.hidden = !!hasVerse;
-    textEl.hidden = !hasVerse;
-    refEl.hidden = !hasVerse;
-    if (metaEl) metaEl.hidden = !hasVerse;
-    if (copyBtn) copyBtn.disabled = !hasVerse;
-
-    if (hasVerse) {
-      textEl.textContent = p.body;
-      refEl.textContent = "— " + p.ref;
-      if (metaEl) metaEl.textContent = p.bible ? p.bible : "";
-    } else {
-      textEl.textContent = "";
-      refEl.textContent = "";
-      if (metaEl) metaEl.textContent = "";
-    }
-  }
-
-  function openEinkPreview() {
-    if (state.selectedVerse == null && state.verses && state.verses.length) {
-      selectVerse(state.verses[0].verse, false);
-    }
-    if (state.selectedVerse == null) return;
-    refreshEinkPreview();
-    var modal = el("eink-modal");
-    if (!modal) return;
-    modal.classList.add("open");
-  }
-
-  function closeEinkPreview() {
-    var modal = el("eink-modal");
-    if (modal) modal.classList.remove("open");
-  }
-
-  function setEinkSize(size) {
-    if (size !== "sm" && size !== "md" && size !== "lg") return;
-    einkState.size = size;
-    refreshEinkPreview();
-  }
-
   /* ---------- Soft context menu (right-click) ---------- */
   var ctxState = { open: false, x: 0, y: 0 };
 
@@ -3087,7 +3005,6 @@
     var xrefDisabled = !state.selectedWord && state.selectedVerse == null;
     if (el("btn-to-xref")) el("btn-to-xref").disabled = xrefDisabled;
     if (el("btn-xref-toolbar")) el("btn-xref-toolbar").disabled = xrefDisabled;
-    if (el("btn-eink")) el("btn-eink").disabled = state.selectedVerse == null;
 
     if (state.selectedWord) {
       chip.className = "chip";
@@ -3139,9 +3056,6 @@
     saveNavPosition();
     // Always re-probe ● indicators for the new verse when on a study tab
     if (state.tab !== "biblia" && state.tab !== "temas") refreshModuleDropdown();
-    if (el("eink-modal") && el("eink-modal").classList.contains("open")) {
-      refreshEinkPreview();
-    }
     if (scroll) {
       var node = document.querySelector('.verse[data-verse="' + verseNum + '"]');
       if (node) node.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -4491,36 +4405,6 @@
     wireXrefOpen(el("btn-xref-toolbar"));
     if (el("btn-clear-sel")) el("btn-clear-sel").onclick = clearSelection;
 
-    // In-app e-ink preview (board mock only)
-    if (el("btn-eink")) {
-      el("btn-eink").onclick = function () {
-        openEinkPreview();
-      };
-    }
-    if (el("eink-modal-close")) {
-      el("eink-modal-close").onclick = closeEinkPreview;
-    }
-    if (el("eink-modal")) {
-      el("eink-modal").onclick = function (ev) {
-        if (ev.target === el("eink-modal")) closeEinkPreview();
-      };
-    }
-    if (el("eink-copy")) {
-      el("eink-copy").onclick = function () {
-        var p = einkPayload();
-        if (!p.body) return;
-        copyTextToClipboard(p.text).catch(function () {});
-      };
-    }
-    var einkSizeBtns = document.querySelectorAll("[data-eink-size]");
-    for (var es = 0; es < einkSizeBtns.length; es++) {
-      (function (btn) {
-        btn.onclick = function () {
-          setEinkSize(btn.getAttribute("data-eink-size"));
-        };
-      })(einkSizeBtns[es]);
-    }
-
     // Cross-ref modal wiring
     if (el("xref-modal-close")) {
       el("xref-modal-close").onclick = closeXrefModal;
@@ -4619,11 +4503,6 @@
           }).catch(function () { closeCtxMenu(); });
           return;
         }
-        if (action === "eink") {
-          closeCtxMenu();
-          openEinkPreview();
-          return;
-        }
         if (action === "underline") {
           toggleUnderline();
           closeCtxMenu();
@@ -4669,7 +4548,6 @@
         closeVerseModal();
         closeHistoryModal();
         closeXrefModal();
-        closeEinkPreview();
         closeRefPanel();
         hideRefTooltip();
       }
