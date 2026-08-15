@@ -1505,15 +1505,26 @@
       .trim();
   }
 
+  /**
+   * Compare ignoring internal spaces so the table doesn't need every spacing
+   * variant. "1 Cor" == "1cor", "2 Tim" == "2tim" — previously only the
+   * unspaced spellings were listed, so the very common "1 Cor 13:4" form
+   * never resolved and silently failed to linkify.
+   */
+  function tightKey(s) {
+    return normKey(s).replace(/\s+/g, "");
+  }
+
   function resolveBookAlias(name) {
-    var key = normKey(name);
+    var key = tightKey(name);
+    if (!key) return null;
     // Prefer longer alias matches
     var best = null;
     var bestLen = 0;
     for (var i = 0; i < BOOK_ALIAS_LIST.length; i++) {
       var b = BOOK_ALIAS_LIST[i];
       for (var j = 0; j < b.a.length; j++) {
-        var a = normKey(b.a[j]);
+        var a = tightKey(b.a[j]);
         if (key === a && a.length >= bestLen) {
           best = b.n;
           bestLen = a.length;
@@ -1523,8 +1534,8 @@
     // Also match full Spanish names from loaded books
     if (state.books && state.books.length) {
       for (var k = 0; k < state.books.length; k++) {
-        var bn = normKey(state.books[k].name);
-        var ba = normKey(state.books[k].abbr);
+        var bn = tightKey(state.books[k].name);
+        var ba = tightKey(state.books[k].abbr);
         if (key === bn || key === ba) return state.books[k].number;
       }
     }
@@ -1544,11 +1555,57 @@
   }
 
   /**
-   * Parse a matched ref string into structured data.
+   * Book abbreviations that collide with everyday Spanish words. Prose like
+   * "la exposición de 5:1" or "el sol 3:4" must not linkify to Deuteronomio /
+   * Cantares. Accepted only when written as an abbreviation: capitalised
+   * ("De 5:1") or dotted ("de. 5:1").
+   */
+  var AMBIGUOUS_BOOK_ALIASES = {
+    de: 1, la: 1, es: 1, he: 1, mi: 1, ti: 1, le: 1, da: 1, sol: 1
+  };
+
+  /**
+   * The ref regex allows up to 3 words in the book slot, so it greedily eats the
+   * word in front of the reference: "véase Mateo 5:12" captures "véase Mateo",
+   * which resolves to nothing and the citation silently fails to linkify. Since
+   * most references in commentary text sit mid-sentence, that lost the majority
+   * of them. Peel leading words off until one resolves, and report the offset so
+   * the link covers only the reference itself.
+   *
+   * @returns {{ bookNumber: number, offset: number, token: string }|null}
+   */
+  function resolveBookPhrase(phrase) {
+    var starts = [];
+    var re = /\S+/g;
+    var w;
+    while ((w = re.exec(phrase)) !== null) starts.push(w.index);
+    for (var i = 0; i < starts.length; i++) {
+      var candidate = phrase.slice(starts[i]);
+      var cleaned = candidate.replace(/\./g, "").replace(/\s+/g, " ").trim();
+      if (!cleaned) continue;
+      if (!isPlausibleBookToken(cleaned, candidate)) continue;
+      var n = resolveBookAlias(cleaned);
+      if (n) return { bookNumber: n, offset: starts[i], token: cleaned };
+    }
+    return null;
+  }
+
+  function isPlausibleBookToken(bookRaw, rawToken) {
+    if (!AMBIGUOUS_BOOK_ALIASES[normKey(bookRaw)]) return true;
+    var raw = String(rawToken == null ? bookRaw : rawToken);
+    if (raw.indexOf(".") >= 0) return true; // "De. 5:1"
+    try {
+      return /^\s*[123]?\s*\p{Lu}/u.test(raw); // "De 5:1"
+    } catch (e) {
+      return /^\s*[123]?\s*[A-ZÁÉÍÓÚÜÑ]/.test(raw);
+    }
+  }
+
+  /**
+   * Parse a matched ref into structured data (book already resolved).
    * Does NOT change main Bible navigation (no auto-save of chapter/verse).
    */
-  function parseRefMatch(bookRaw, ch, v1, v2) {
-    var bn = resolveBookAlias(bookRaw);
+  function parseRefMatch(bn, ch, v1, v2) {
     if (!bn) return null;
     var chapter = parseInt(ch, 10);
     var verseStart = parseInt(v1, 10);
@@ -1586,12 +1643,15 @@
     var reRef =
       /(\b(?:[123]\s*)?(?:[A-Za-zÁÉÍÓÚÜÑáéíóúüñ.]{1,}(?:\s+[A-Za-zÁÉÍÓÚÜÑáéíóúüñ.]{2,}){0,2}))\.?\s*[_ ]?\s*(\d{1,3})\s*[:.,]\s*(\d{1,3})(?:\s*[-–—]\s*(\d{1,3}))?/g;
     while ((m = reRef.exec(raw)) !== null) {
-      var bookRaw = m[1].replace(/\./g, "").replace(/\s+/g, " ").trim();
-      var parsed = parseRefMatch(bookRaw, m[2], m[3], m[4] || "");
+      var book = resolveBookPhrase(m[1]);
+      var parsed = book && parseRefMatch(book.bookNumber, m[2], m[3], m[4] || "");
       if (parsed) {
+        var refStart = m.index + book.offset;
+        var refEnd = m.index + m[0].length;
+        var refText = raw.slice(refStart, refEnd);
         matches.push({
-          start: m.index,
-          end: m.index + m[0].length,
+          start: refStart,
+          end: refEnd,
           html:
             '<span class="bibleref study-ref" tabindex="0" role="link"' +
             ' data-kind="bible"' +
@@ -1601,7 +1661,7 @@
             ' data-v2="' + parsed.verseEnd + '"' +
             ' data-label="' + escapeHtml(parsed.label) + '"' +
             ' title="Ver ' + escapeHtml(parsed.label) + ' (hover / clic)">' +
-            escapeHtml(m[0]) +
+            escapeHtml(refText) +
             "</span>"
         });
       }
@@ -2453,8 +2513,10 @@
     var sel = el("sel-mod");
     if (sel) {
       sel.value = path;
-      // Trigger existing onchange loaders
-      if (typeof sel.onchange === "function") sel.onchange();
+      // Trigger existing onchange loaders.
+      // NOTE: call with `sel` as `this` — the handler reads `this.value`, and a
+      // bare `sel.onchange()` runs with `this === undefined` under "use strict".
+      if (typeof sel.onchange === "function") sel.onchange.call(sel);
       else {
         try { sel.dispatchEvent(new Event("change")); } catch (e) {}
       }
@@ -3127,6 +3189,38 @@
     updateHlBarUI();
   }
 
+  /**
+   * Which instance of the *same* word inside the verse is selected (0-based).
+   *
+   * `state.selectedWordIndex` counts every token in the rendered verse, but the
+   * resolver ties-breaks between equally-scoring interlinear glosses — a
+   * different index space. Sending the raw token index made it pick the wrong
+   * gloss (or none). Occurrence order is what both sides actually agree on.
+   */
+  function selectedWordOccurrence() {
+    if (state.selectedWordIndex < 0 || !state.selectedWord) return -1;
+    var raw = "";
+    for (var i = 0; i < state.verses.length; i++) {
+      if (state.verses[i].verse === state.selectedVerse) {
+        raw = String(state.verses[i].text || "");
+        break;
+      }
+    }
+    if (!raw) return -1;
+    // WOC markers become spaces so tokenization matches appendTokenizedText()
+    var parts = tokenizeWords(raw.replace(/[\uE000\uE001]/g, " "));
+    var target = normKey(state.selectedWord);
+    var tokenIdx = 0;
+    var occurrence = 0;
+    for (var p = 0; p < parts.length; p++) {
+      if (parts[p].type !== "word") continue;
+      if (tokenIdx === state.selectedWordIndex) return occurrence;
+      if (normKey(parts[p].text) === target) occurrence++;
+      tokenIdx++;
+    }
+    return -1;
+  }
+
   /** Candidate interlinear Bibles from the scanned module list */
   function interlinearCandidates() {
     var list = state.bibles || [];
@@ -3220,7 +3314,10 @@
       chapter: state.chapter,
       verse: state.selectedVerse,
       word: state.selectedWord,
-      wordIndex: state.selectedWordIndex >= 0 ? state.selectedWordIndex : null,
+      wordIndex: (function () {
+        var occ = selectedWordOccurrence();
+        return occ >= 0 ? occ : null;
+      })(),
       interlinearPaths: paths
     }).then(function (res) {
       state.selectedStrongs = (res && res.hits) || [];
@@ -3606,7 +3703,7 @@
         termInput.value = state.selectedWord;
         el("lex-list").innerHTML =
           '<div class="status">Buscando el número Strong’s de «' +
-          state.selectedWord + "» en el interlineal…</div>";
+          escapeHtml(state.selectedWord) + "» en el interlineal…</div>";
         renderStudySideRail("lexicon");
         resolveSelectedStrongs(false).then(function () {
           if (state.selectedStrongs && state.selectedStrongs.length) {
@@ -3910,7 +4007,7 @@
       if (!state.cmtHits.length) {
         // Fallback: always show verse commentary so user isn't stuck empty
         el("cmt-list").innerHTML =
-          '<div class="status">No se encontró «' + term +
+          '<div class="status">No se encontró «' + escapeHtml(term) +
           '» como texto en este módulo. Mostrando el comentario del <b>versículo</b>…</div>';
         loadCommentariesForVerse();
         return;
