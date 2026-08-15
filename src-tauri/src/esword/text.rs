@@ -15,13 +15,9 @@ static RE_RTF_TAB: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\tab\b ?").unwrap())
 /// Disambiguated in the replacer: a `?` suffix or `-` prefix means RTF.
 static RE_UNI_ESC: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\\u(-?[0-9a-fA-F]{1,6})(\?)?").unwrap());
-static RE_HEX_NUM: Lazy<Regex> = Lazy::new(|| Regex::new(r"&#x([0-9a-fA-F]+);").unwrap());
-static RE_DEC_NUM: Lazy<Regex> = Lazy::new(|| Regex::new(r"&#(\d+);").unwrap());
 /// RTF hex bytes: \'e1 \'ab \'e7 (e-Sword Vine AT, etc.)
 static RE_RTF_HEX_RUN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?:\\'[0-9a-fA-F]{2})+").unwrap());
-static RE_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ \t]+").unwrap());
-static RE_NL: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
 /// e-Sword style Gén_25:16 → normalize before linkify
 static RE_ESWORD_REF: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
@@ -170,73 +166,309 @@ fn decode_rtf_hex_escapes(text: &str) -> String {
         .into_owned()
 }
 
+/// Which cleaning stages an input actually needs. Most Bible verses are plain
+/// text; scanning once up front lets us skip ~30 full-string rewrites per row.
+#[derive(Default, Clone, Copy)]
+struct Shape {
+    tag: bool,
+    entity: bool,
+    backslash: bool,
+    brace: bool,
+    underscore: bool,
+}
+
+impl Shape {
+    fn of(s: &str) -> Self {
+        let mut sh = Shape::default();
+        for &b in s.as_bytes() {
+            match b {
+                b'<' | b'>' => sh.tag = true,
+                b'&' => sh.entity = true,
+                b'\\' => sh.backslash = true,
+                b'{' | b'}' => sh.brace = true,
+                b'_' => sh.underscore = true,
+                _ => {}
+            }
+        }
+        sh
+    }
+
+    fn is_plain(&self) -> bool {
+        !(self.tag || self.entity || self.backslash || self.brace)
+    }
+}
+
+/// Block-level tags that carry layout, collapsed in one pass instead of
+/// thirteen sequential `String::replace` rewrites.
+fn replace_block_tags(s: &str) -> String {
+    const NEWLINE: &[&str] = &["<br/>", "<br />", "<br>", "</p>", "</div>", "</li>", "</tr>"];
+    const DROP: &[&str] = &["</span>", "</sup>", "<sup>", "</ref>", "<ref>"];
+
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            let rest = &s[i..];
+            if let Some(t) = NEWLINE.iter().find(|t| rest.starts_with(**t)) {
+                out.push('\n');
+                i += t.len();
+                continue;
+            }
+            if let Some(t) = DROP.iter().find(|t| rest.starts_with(**t)) {
+                i += t.len();
+                continue;
+            }
+            if rest.starts_with("<li>") {
+                out.push_str("• ");
+                i += 4;
+                continue;
+            }
+        }
+        let ch = s[i..].chars().next().unwrap_or('\u{FFFD}');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// The named entities e-Sword modules actually emit for Spanish text. Anything
+/// else is left for `html_escape` at the end of the pipeline.
+fn named_entity(name: &str) -> Option<char> {
+    Some(match name {
+        "nbsp" => ' ',
+        "laquo" => '«',
+        "raquo" => '»',
+        "aacute" => 'á',
+        "eacute" => 'é',
+        "iacute" => 'í',
+        "oacute" => 'ó',
+        "uacute" => 'ú',
+        "ntilde" => 'ñ',
+        "Aacute" => 'Á',
+        "Eacute" => 'É',
+        "Iacute" => 'Í',
+        "Oacute" => 'Ó',
+        "Uacute" => 'Ú',
+        "Ntilde" => 'Ñ',
+        _ => return None,
+    })
+}
+
+/// Numeric (`&#x05D7;` / `&#1488;`) and known named entities in a single pass.
+/// A numeric entity whose code point is invalid is dropped, matching the
+/// previous regex behaviour.
+fn decode_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            // Entity names/numbers are short; cap the scan so a bare '&' in
+            // prose doesn't drag us across the whole string. The cap has to
+            // land on a char boundary — multi-byte text sits right next to
+            // entities all over these modules.
+            let mut window_end = (i + 14).min(s.len());
+            while window_end > i && !s.is_char_boundary(window_end) {
+                window_end -= 1;
+            }
+            let window = &s[i..window_end];
+            if let Some(semi) = window.find(';') {
+                let body = &window[1..semi];
+                let mut matched = None;
+                if let Some(hex) = body.strip_prefix("#x") {
+                    if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        matched = Some(u32::from_str_radix(hex, 16).ok().and_then(char::from_u32));
+                    }
+                } else if let Some(dec) = body.strip_prefix('#') {
+                    if !dec.is_empty() && dec.bytes().all(|b| b.is_ascii_digit()) {
+                        matched = Some(dec.parse::<u32>().ok().and_then(char::from_u32));
+                    }
+                } else if let Some(c) = named_entity(body) {
+                    matched = Some(Some(c));
+                }
+                if let Some(decoded) = matched {
+                    if let Some(c) = decoded {
+                        out.push(c);
+                    }
+                    i += semi + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = s[i..].chars().next().unwrap_or('\u{FFFD}');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+fn is_latin_letter(c: char) -> bool {
+    c.is_ascii_alphabetic()
+        || matches!(
+            c,
+            'á' | 'é' | 'í' | 'ó' | 'ú' | 'ü' | 'ñ' | 'Á' | 'É' | 'Í' | 'Ó' | 'Ú' | 'Ü' | 'Ñ'
+                | 'à' | 'è' | 'ì' | 'ò' | 'ù' | 'â' | 'ê' | 'î' | 'ô' | 'û' | 'ç' | 'Ç'
+                // Macron vowels used by the Greek/Hebrew transliterations these
+                // lexicons print alongside the headword (kōmē, šālôm).
+                | 'ā' | 'ē' | 'ī' | 'ō' | 'ū' | 'Ā' | 'Ē' | 'Ī' | 'Ō' | 'Ū'
+                | 'š' | 'Š' | 'ḥ' | 'ṣ' | 'ṭ' | 'ĕ' | 'ă' | 'ŏ'
+        )
+}
+
+fn is_greek_char(c: char) -> bool {
+    matches!(c as u32, 0x0370..=0x03FF | 0x1F00..=0x1FFF)
+}
+
+fn is_hebrew_char(c: char) -> bool {
+    matches!(c as u32, 0x0590..=0x05FF)
+}
+
+/// Some modules were built by decoding Windows-1252 Spanish text as CP1253
+/// (Greek) or CP1255 (Hebrew), so accented letters ship as Greek/Hebrew ones:
+/// `tambiιn`, `posiciσn`, `Seסor`, `Aplicaciףn`. Each mapping below is the
+/// exact byte round-trip, verified against the installed library.
+fn unmojibake(c: char) -> Option<char> {
+    Some(match c {
+        // CP1252 byte rendered through CP1253
+        'α' => 'á',
+        'ι' => 'é',
+        'ν' => 'í',
+        'σ' => 'ó',
+        'ϊ' => 'ú',
+        'ρ' => 'ñ',
+        'ό' => 'ü',
+        'Α' => 'Á',
+        'Ι' => 'É',
+        'Ν' => 'Í',
+        'Σ' => 'Ó',
+        'Ϊ' => 'Ú',
+        'Ρ' => 'Ñ',
+        'Ώ' => '¿',
+        '\u{0385}' => '¡',
+        // Romanized Greek in these lexicons spells omega as a macron o; the
+        // module shipped it as tau instead (kτmē → kōmē, chτrizτ → chōrizō,
+        // IΤANNOU → IŌANNOU). Only fires inside a Latin word, so real τ is safe.
+        'τ' => 'ō',
+        'Τ' => 'Ō',
+        // CP1252 byte rendered through CP1255
+        '\u{05D1}' => 'á',
+        '\u{05D9}' => 'é',
+        '\u{05DD}' => 'í',
+        '\u{05E3}' => 'ó',
+        '\u{05EA}' => 'ú',
+        '\u{05E1}' => 'ñ',
+        '\u{05B1}' => 'Á',
+        '\u{05B9}' => 'É',
+        '\u{05BD}' => 'Í',
+        '\u{05C3}' => 'Ó',
+        '\u{05C1}' => 'Ñ',
+        _ => return None,
+    })
+}
+
+/// Repair the mis-encoded accents described on [`unmojibake`].
+///
+/// Only a *lone* Greek/Hebrew letter touching a Latin word is repaired. A run
+/// of two or more is genuine Greek or Hebrew (`ἄλφα`, `אָב`) and is never
+/// touched, so real lexicon headwords survive intact.
+fn repair_codepage_mojibake(text: String) -> String {
+    // Every character we repair is Greek (U+0370-03FF) or Hebrew (U+0590-05FF),
+    // whose UTF-8 lead bytes all fall in 0xCD..=0xD7. A byte scan rejects the
+    // overwhelming majority of rows without decoding a single char.
+    if !text.as_bytes().iter().any(|&b| (0xCD..=0xD7).contains(&b)) {
+        return text;
+    }
+    if !text.chars().any(|c| unmojibake(c).is_some()) {
+        return text;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (i, &c) in chars.iter().enumerate() {
+        let Some(fixed) = unmojibake(c) else {
+            out.push(c);
+            continue;
+        };
+        let prev = if i > 0 { chars[i - 1] } else { ' ' };
+        let next = chars.get(i + 1).copied().unwrap_or(' ');
+        let same_script = |x: char| {
+            if is_greek_char(c) {
+                is_greek_char(x)
+            } else {
+                is_hebrew_char(x)
+            }
+        };
+        let touches_latin = is_latin_letter(prev) || is_latin_letter(next);
+        if touches_latin && !same_script(prev) && !same_script(next) {
+            out.push(fixed);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Limpia HTML/RTF de texto e-Sword (incl. Vine AT RTF y HTML moderno).
 /// Preserva las palabras de Jesús como marcadores WOC_OPEN…WOC_CLOSE.
 pub fn clean_text(raw: &str) -> String {
+    let shape = Shape::of(raw);
+
+    // Plain prose (most Bible verses) skips every markup stage.
+    if shape.is_plain() {
+        let mut text = raw.to_string();
+        if shape.underscore {
+            text = normalize_esword_refs(&text);
+        }
+        return finish(text);
+    }
+
     let mut text = raw.to_string();
 
-    // Mark red-letter / Words of Christ before stripping tags
-    text = RE_WOC
-        .replace_all(&text, |caps: &regex::Captures| {
-            let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            format!("{WOC_OPEN}{inner}{WOC_CLOSE}")
-        })
-        .into_owned();
+    let mut has_tag = shape.tag;
+    let mut has_backslash = shape.backslash;
 
-    // Preserve Strong’s codes from <num>H2691</num> before tag strip
-    text = RE_NUM_TAG
-        .replace_all(&text, |caps: &regex::Captures| {
-            let code = caps
-                .get(1)
-                .map(|m| m.as_str())
-                .unwrap_or("")
-                .replace(' ', "")
-                .to_uppercase();
-            format!(" {code} ")
-        })
-        .into_owned();
+    if has_tag {
+        // Mark red-letter / Words of Christ before stripping tags
+        text = RE_WOC
+            .replace_all(&text, |caps: &regex::Captures| {
+                let inner = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                format!("{WOC_OPEN}{inner}{WOC_CLOSE}")
+            })
+            .into_owned();
 
-    // Preserve Hebrew inside <heb>…</heb>
-    text = RE_HEB_TAG
-        .replace_all(&text, |caps: &regex::Captures| {
-            caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string()
-        })
-        .into_owned();
+        // Preserve Strong’s codes from <num>H2691</num> before tag strip
+        text = RE_NUM_TAG
+            .replace_all(&text, |caps: &regex::Captures| {
+                let code = caps
+                    .get(1)
+                    .map(|m| m.as_str())
+                    .unwrap_or("")
+                    .replace(' ', "")
+                    .to_uppercase();
+                format!(" {code} ")
+            })
+            .into_owned();
 
-    text = text
-        .replace("<br/>", "\n")
-        .replace("<br />", "\n")
-        .replace("<br>", "\n")
-        .replace("</p>", "\n")
-        .replace("</div>", "\n")
-        .replace("</span>", "")
-        .replace("</sup>", "")
-        .replace("<sup>", "")
-        .replace("</ref>", "")
-        .replace("<ref>", "");
+        // Preserve Hebrew inside <heb>…</heb>
+        text = RE_HEB_TAG
+            .replace_all(&text, |caps: &regex::Captures| {
+                caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string()
+            })
+            .into_owned();
 
-    text = RE_HEX_NUM
-        .replace_all(&text, |caps: &regex::Captures| {
-            u32::from_str_radix(&caps[1], 16)
-                .ok()
-                .and_then(char::from_u32)
-                .map(|c| c.to_string())
-                .unwrap_or_default()
-        })
-        .into_owned();
+        text = replace_block_tags(&text);
+    }
 
-    text = RE_DEC_NUM
-        .replace_all(&text, |caps: &regex::Captures| {
-            caps[1]
-                .parse::<u32>()
-                .ok()
-                .and_then(char::from_u32)
-                .map(|c| c.to_string())
-                .unwrap_or_default()
-        })
-        .into_owned();
+    if shape.entity {
+        text = decode_entities(&text);
+        // An entity can decode *into* markup (`&#60;` → `<`), so re-check
+        // rather than trusting the shape of the raw input.
+        has_tag = has_tag || text.contains('<');
+        has_backslash = has_backslash || text.contains('\\');
+    }
 
-    text = RE_UNI_ESC
+    if has_backslash {
+        text = RE_UNI_ESC
         .replace_all(&text, |caps: &regex::Captures| {
             let body = &caps[1];
             let is_rtf = caps.get(2).is_some() || body.starts_with('-');
@@ -257,49 +489,49 @@ pub fn clean_text(raw: &str) -> String {
         })
         .into_owned();
 
-    text = text
-        .replace("</li>", "\n")
-        .replace("</tr>", "\n")
-        .replace("<li>", "• ")
-        .replace("&nbsp;", " ")
-        .replace("&laquo;", "«")
-        .replace("&raquo;", "»")
-        .replace("&aacute;", "á")
-        .replace("&eacute;", "é")
-        .replace("&iacute;", "í")
-        .replace("&oacute;", "ó")
-        .replace("&uacute;", "ú")
-        .replace("&ntilde;", "ñ")
-        .replace("&Aacute;", "Á")
-        .replace("&Eacute;", "É")
-        .replace("&Iacute;", "Í")
-        .replace("&Oacute;", "Ó")
-        .replace("&Uacute;", "Ú")
-        .replace("&Ntilde;", "Ñ");
-
-    // Decode RTF \'hh BEFORE stripping other RTF controls (Vine AT+)
-    text = decode_rtf_hex_escapes(&text);
+        // Decode RTF \'hh BEFORE stripping other RTF controls (Vine AT+)
+        text = decode_rtf_hex_escapes(&text);
+    }
 
     // Strip remaining HTML tags but keep WOC private-use markers
-    text = RE_HTML.replace_all(&text, "").into_owned();
-    // Structural RTF controls first: \par / \line / \tab carry the layout.
-    // The generic sweep below turns every control word into a space, so
-    // without this an entire RTF commentary collapses into one long blob.
-    text = RE_RTF_BREAK.replace_all(&text, "\n").into_owned();
-    text = RE_RTF_TAB.replace_all(&text, "\t").into_owned();
-    // Remaining RTF controls (not hex — those already decoded)
-    text = RE_RTF.replace_all(&text, " ").into_owned();
-    // leftover backslash groups
-    text = text.replace("\\{", "{").replace("\\}", "}");
-    text = text.replace('{', "").replace('}', "");
-    // RTF optional hyphen / nonbreaking
-    text = text.replace("\\-", "").replace("\\_", "_").replace("\\~", " ");
+    if has_tag {
+        text = RE_HTML.replace_all(&text, "").into_owned();
+    }
 
-    text = html_escape::decode_html_entities(&text).into_owned();
+    if has_backslash {
+        // Structural RTF controls first: \par / \line / \tab carry the layout.
+        // The generic sweep below turns every control word into a space, so
+        // without this an entire RTF commentary collapses into one long blob.
+        text = RE_RTF_BREAK.replace_all(&text, "\n").into_owned();
+        text = RE_RTF_TAB.replace_all(&text, "\t").into_owned();
+        // Remaining RTF controls (not hex — those already decoded)
+        text = RE_RTF.replace_all(&text, " ").into_owned();
+        // leftover backslash groups
+        text = text.replace("\\{", "{").replace("\\}", "}");
+    }
+    if text.contains('{') || text.contains('}') {
+        text = text.replace('{', "").replace('}', "");
+    }
+    if has_backslash {
+        // RTF optional hyphen / nonbreaking
+        text = text.replace("\\-", "").replace("\\_", "_").replace("\\~", " ");
+    }
 
-    // Normalize e-Sword refs Gén_25:16 → Gén 25:16 for the UI linkifier
-    text = RE_ESWORD_REF
-        .replace_all(&text, |caps: &regex::Captures| {
+    if shape.entity {
+        text = html_escape::decode_html_entities(&text).into_owned();
+    }
+
+    if text.contains('_') {
+        text = normalize_esword_refs(&text);
+    }
+
+    finish(text)
+}
+
+/// Normalize e-Sword refs Gén_25:16 → Gén 25:16 for the UI linkifier.
+fn normalize_esword_refs(text: &str) -> String {
+    RE_ESWORD_REF
+        .replace_all(text, |caps: &regex::Captures| {
             let book = caps.get(1).map(|m| m.as_str()).unwrap_or("").trim();
             let ch = caps.get(2).map(|m| m.as_str()).unwrap_or("");
             let v1 = caps.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -310,12 +542,62 @@ pub fn clean_text(raw: &str) -> String {
                 format!("{book} {ch}:{v1}")
             }
         })
-        .into_owned();
+        .into_owned()
+}
 
-    text = RE_SPACE.replace_all(&text, " ").into_owned();
-    text = text.replace(" \n", "\n").replace("\n ", "\n");
-    text = RE_NL.replace_all(&text, "\n\n").into_owned();
-    text.trim().to_string()
+/// Collapse space/tab runs, drop spaces hugging a newline, cap blank lines at
+/// one, and trim — in a single pass.
+///
+/// This replaced `RE_SPACE` + two `String::replace` + `RE_NL`, which together
+/// were the most expensive thing in the pipeline (128 ms of a 407 ms release
+/// run over the module corpus, more than HTML stripping and entity decoding
+/// combined) purely to squeeze runs of spaces.
+fn collapse_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut space_pending = false;
+    let mut newline_run = 0usize;
+    for c in s.chars() {
+        match c {
+            ' ' | '\t' => space_pending = true,
+            '\n' => {
+                newline_run += 1;
+                space_pending = false;
+            }
+            _ => {
+                if newline_run > 0 {
+                    if !out.is_empty() {
+                        for _ in 0..newline_run.min(2) {
+                            out.push('\n');
+                        }
+                    }
+                    newline_run = 0;
+                    space_pending = false;
+                } else if space_pending {
+                    if !out.is_empty() {
+                        out.push(' ');
+                    }
+                    space_pending = false;
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// Whitespace normalization + codepage repair, shared by both paths.
+fn finish(text: String) -> String {
+    let collapsed = collapse_whitespace(&text);
+    // `collapse_whitespace` only folds ' ' and '\t'; the trim still has to run
+    // for the other whitespace these modules leak — trailing '\r' in the
+    // interlinear bibles, leading U+00A0 in the topic dictionaries.
+    let trimmed = collapsed.trim();
+    let owned = if trimmed.len() == collapsed.len() {
+        collapsed
+    } else {
+        trimmed.to_string()
+    };
+    repair_codepage_mojibake(owned)
 }
 
 /// Intenta descomprimir blobs comunes; detecta cifrado sqliteplus.
@@ -494,6 +776,116 @@ mod tests {
         assert!(out.contains("H2691"));
         assert!(out.contains('«'));
         assert!(out.contains('á'));
+    }
+
+    /// Per-stage timing over the same corpus, so optimisation effort goes where
+    /// the milliseconds actually are instead of where they look like they are.
+    ///
+    ///   CORPUS_IN=corpus_raw.jsonl cargo test --lib -- --ignored stage_bench --nocapture
+    #[test]
+    #[ignore = "harness: needs CORPUS_IN"]
+    fn stage_bench() {
+        use std::io::{BufRead, BufReader};
+        use std::time::Instant;
+
+        let inp = std::env::var("CORPUS_IN").expect("set CORPUS_IN");
+        let src = BufReader::new(std::fs::File::open(&inp).expect("open CORPUS_IN"));
+        let mut raws: Vec<String> = Vec::new();
+        for line in src.lines() {
+            let line = line.expect("read");
+            if line.trim().is_empty() {
+                continue;
+            }
+            let rec: serde_json::Value = serde_json::from_str(&line).expect("parse");
+            if let Some(r) = rec.get("raw").and_then(|v| v.as_str()) {
+                raws.push(r.to_string());
+            }
+        }
+        let total_bytes: usize = raws.iter().map(|r| r.len()).sum();
+        eprintln!("corpus: {} rows, {} KiB\n", raws.len(), total_bytes / 1024);
+
+        macro_rules! bench {
+            ($name:expr, $body:expr) => {{
+                let t = Instant::now();
+                let mut sink = 0usize;
+                for raw in &raws {
+                    let f: &dyn Fn(&str) -> String = &$body;
+                    sink = sink.wrapping_add(f(raw).len());
+                }
+                let ms = t.elapsed().as_millis();
+                eprintln!("  {:<28} {:>6} ms   (sink {})", $name, ms, sink & 0xF);
+            }};
+        }
+
+        bench!("Shape::of + clone", |s: &str| {
+            let _ = Shape::of(s);
+            s.to_string()
+        });
+        bench!("RE_WOC", |s: &str| RE_WOC.replace_all(s, "$1").into_owned());
+        bench!("RE_NUM_TAG", |s: &str| RE_NUM_TAG
+            .replace_all(s, " $1 ")
+            .into_owned());
+        bench!("RE_HEB_TAG", |s: &str| RE_HEB_TAG
+            .replace_all(s, "$1")
+            .into_owned());
+        bench!("replace_block_tags", |s: &str| replace_block_tags(s));
+        bench!("decode_entities", |s: &str| decode_entities(s));
+        bench!("RE_HTML strip", |s: &str| RE_HTML
+            .replace_all(s, "")
+            .into_owned());
+        bench!("html_escape decode", |s: &str| {
+            html_escape::decode_html_entities(s).into_owned()
+        });
+        bench!("collapse_whitespace", |s: &str| collapse_whitespace(s));
+        bench!("RE_ESWORD_REF", |s: &str| normalize_esword_refs(s));
+        bench!("repair_mojibake", |s: &str| repair_codepage_mojibake(
+            s.to_string()
+        ));
+        bench!("FULL clean_text", |s: &str| clean_text(s));
+    }
+
+    /// Golden-corpus harness: run `clean_text` over raw cells sampled from the
+    /// installed modules and dump the result, so a decoder change can be diffed
+    /// line-for-line against the previous behaviour instead of eyeballed.
+    ///
+    ///   CORPUS_IN=corpus_raw.jsonl CORPUS_OUT=clean_before.jsonl \
+    ///     cargo test --lib -- --ignored golden_dump --nocapture
+    #[test]
+    #[ignore = "harness: needs CORPUS_IN / CORPUS_OUT"]
+    fn golden_dump() {
+        use std::io::{BufRead, BufReader, BufWriter, Write};
+
+        let inp = std::env::var("CORPUS_IN").expect("set CORPUS_IN");
+        let outp = std::env::var("CORPUS_OUT").expect("set CORPUS_OUT");
+        let src = BufReader::new(std::fs::File::open(&inp).expect("open CORPUS_IN"));
+        let mut dst = BufWriter::new(std::fs::File::create(&outp).expect("create CORPUS_OUT"));
+
+        let started = std::time::Instant::now();
+        let mut rows = 0usize;
+        let mut bytes_in = 0usize;
+        for line in src.lines() {
+            let line = line.expect("read line");
+            if line.trim().is_empty() {
+                continue;
+            }
+            let rec: serde_json::Value = serde_json::from_str(&line).expect("parse corpus line");
+            let id = rec.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+            let Some(raw) = rec.get("raw").and_then(|v| v.as_str()) else {
+                continue; // blob rows are exercised through decode_blob, not here
+            };
+            bytes_in += raw.len();
+            let cleaned = clean_text(raw);
+            let out = serde_json::json!({ "id": id, "clean": cleaned });
+            writeln!(dst, "{out}").expect("write");
+            rows += 1;
+        }
+        dst.flush().expect("flush");
+        let ms = started.elapsed().as_millis();
+        eprintln!(
+            "golden_dump: {rows} rows, {} KiB in, {ms} ms ({:.1} rows/ms)",
+            bytes_in / 1024,
+            rows as f64 / ms.max(1) as f64
+        );
     }
 }
 
