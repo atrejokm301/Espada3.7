@@ -6,7 +6,15 @@ use std::io::Read;
 static RE_HTML: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)<[^>]+>").unwrap());
 /// RTF control words: \b \i \cf9 \fs32 \rtlch \ltrch \f2 etc. (not \'hh)
 static RE_RTF: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\[a-zA-Z]+\d* ?").unwrap());
-static RE_HEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\u([0-9a-fA-F]{2,6})\??").unwrap());
+/// RTF paragraph / line breaks. `\b` keeps `\pard` (paragraph *defaults*) out.
+static RE_RTF_BREAK: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\(?:par|line)\b ?").unwrap());
+static RE_RTF_TAB: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\tab\b ?").unwrap());
+/// Unicode escapes, two incompatible dialects sharing one spelling:
+/// - RTF `\uN` / `\uN?` is **decimal**, and may be a negative i16 for cp > 0x7FFF
+/// - JS/JSON `\uXXXX` is **hex**
+/// Disambiguated in the replacer: a `?` suffix or `-` prefix means RTF.
+static RE_UNI_ESC: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\\u(-?[0-9a-fA-F]{1,6})(\?)?").unwrap());
 static RE_HEX_NUM: Lazy<Regex> = Lazy::new(|| Regex::new(r"&#x([0-9a-fA-F]+);").unwrap());
 static RE_DEC_NUM: Lazy<Regex> = Lazy::new(|| Regex::new(r"&#(\d+);").unwrap());
 /// RTF hex bytes: \'e1 \'ab \'e7 (e-Sword Vine AT, etc.)
@@ -228,11 +236,22 @@ pub fn clean_text(raw: &str) -> String {
         })
         .into_owned();
 
-    text = RE_HEX
+    text = RE_UNI_ESC
         .replace_all(&text, |caps: &regex::Captures| {
-            u32::from_str_radix(&caps[1], 16)
-                .ok()
-                .and_then(char::from_u32)
+            let body = &caps[1];
+            let is_rtf = caps.get(2).is_some() || body.starts_with('-');
+            let cp = if is_rtf {
+                // RTF \uN is decimal; negative values are the signed-16-bit
+                // spelling of code points above 0x7FFF (\u-3913? => U+F0B7).
+                body.parse::<i32>()
+                    .ok()
+                    .map(|n| if n < 0 { (n + 65536) as u32 } else { n as u32 })
+                    // Not actually decimal after all — fall back to hex.
+                    .or_else(|| u32::from_str_radix(body, 16).ok())
+            } else {
+                u32::from_str_radix(body, 16).ok()
+            };
+            cp.and_then(char::from_u32)
                 .map(|c| c.to_string())
                 .unwrap_or_default()
         })
@@ -263,7 +282,12 @@ pub fn clean_text(raw: &str) -> String {
 
     // Strip remaining HTML tags but keep WOC private-use markers
     text = RE_HTML.replace_all(&text, "").into_owned();
-    // RTF controls (not hex — those already decoded)
+    // Structural RTF controls first: \par / \line / \tab carry the layout.
+    // The generic sweep below turns every control word into a space, so
+    // without this an entire RTF commentary collapses into one long blob.
+    text = RE_RTF_BREAK.replace_all(&text, "\n").into_owned();
+    text = RE_RTF_TAB.replace_all(&text, "\t").into_owned();
+    // Remaining RTF controls (not hex — those already decoded)
     text = RE_RTF.replace_all(&text, " ").into_owned();
     // leftover backslash groups
     text = text.replace("\\{", "{").replace("\\}", "}");
@@ -423,6 +447,46 @@ mod tests {
     }
 
     #[test]
+    fn rtf_paragraph_breaks_survive() {
+        let raw = r"Primer parrafo.\par Segundo parrafo.\par\par Tercero.\pard\b listo";
+        let out = clean_text(raw);
+        assert!(
+            out.contains("Primer parrafo.\nSegundo parrafo."),
+            "\\par should become a newline: {out:?}"
+        );
+        assert!(
+            !out.contains("\\pard"),
+            "\\pard must still be stripped as a control word: {out:?}"
+        );
+        assert!(out.contains("listo"), "text after \\pard lost: {out:?}");
+    }
+
+    #[test]
+    fn rtf_unicode_escapes_are_decimal() {
+        // 舠? is a left double quote (U+201C), NOT hex 0x8220.
+        let out = clean_text(r"dijo \u8220?Padre\u8221? y callo");
+        assert!(
+            out.contains('\u{201C}') && out.contains('\u{201D}'),
+            "RTF \\uN must decode as decimal: {out:?}"
+        );
+        // Negative i16 spelling for code points above 0x7FFF
+        let neg = clean_text(r"bullet \u-3913? aqui");
+        assert!(
+            neg.contains('\u{F0B7}'),
+            "negative RTF \\u must wrap to +65536: {neg:?}"
+        );
+        // JS-style hex (no `?` suffix) keeps decoding as hex
+        let hex = clean_text(r"caf\u00e9 listo");
+        assert!(hex.contains('é'), "hex \\uXXXX regressed: {hex:?}");
+    }
+
+    #[test]
+    fn short_utf8_blob_is_text_not_binary() {
+        let out = decode_blob("amar".as_bytes()).expect("short text blob");
+        assert_eq!(out, "amar", "short entries must not be called binary: {out:?}");
+    }
+
+    #[test]
     fn html_vine_entities_and_strong() {
         let raw = r#"<p>jatser (<span>&#x05D7;&#x05B8;&#x05E6;&#x05B5;&#x05E8;</span>, <span>H2691</span>), &laquo;atrio&raquo;. est&aacute;</p>"#;
         let out = clean_text(raw);
@@ -435,30 +499,51 @@ mod tests {
 
 fn bytes_to_text(b: &[u8]) -> Option<String> {
     if let Ok(s) = std::str::from_utf8(b) {
-        let cleaned = clean_text(s);
-        // Require some printable content
-        let printable = cleaned
+        let stray_ctrl = s
             .chars()
-            .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+            .filter(|c| c.is_control() && *c != '\n' && *c != '\r' && *c != '\t')
             .count();
-        if printable > 8 {
-            return Some(cleaned);
+        let cleaned = clean_text(s);
+        if stray_ctrl == 0 {
+            // Clean UTF-8 with no stray control bytes is a strong signal for real
+            // text — ciphertext/compressed blobs essentially never decode this way.
+            // Length is NOT a useful filter here: short dictionary entries
+            // ("amar", "cf. H430") were being reported as unreadable binary.
+            if !cleaned.is_empty() {
+                return Some(cleaned);
+            }
+        } else {
+            // Mostly-printable but with stray control bytes — keep the old,
+            // stricter bar so binary noise doesn't slip through.
+            let printable = cleaned
+                .chars()
+                .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
+                .count();
+            if printable > 8 {
+                return Some(cleaned);
+            }
         }
     }
-    if b.len() >= 2 && b[0] == 0xff && b[1] == 0xfe {
-        let u16s: Vec<u16> = b[2..]
-            .chunks(2)
-            .filter_map(|c| {
-                if c.len() == 2 {
-                    Some(u16::from_le_bytes([c[0], c[1]]))
+    // UTF-16, either endianness (some legacy modules ship BE)
+    let utf16 = match b {
+        [0xff, 0xfe, rest @ ..] => Some((rest, true)),
+        [0xfe, 0xff, rest @ ..] => Some((rest, false)),
+        _ => None,
+    };
+    if let Some((rest, little)) = utf16 {
+        let u16s: Vec<u16> = rest
+            .chunks_exact(2)
+            .map(|c| {
+                if little {
+                    u16::from_le_bytes([c[0], c[1]])
                 } else {
-                    None
+                    u16::from_be_bytes([c[0], c[1]])
                 }
             })
             .collect();
         if let Ok(s) = String::from_utf16(&u16s) {
             let cleaned = clean_text(&s);
-            if cleaned.len() > 8 {
+            if !cleaned.is_empty() {
                 return Some(cleaned);
             }
         }
