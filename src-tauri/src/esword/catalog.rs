@@ -36,7 +36,10 @@ struct CacheEntry {
     info: ModuleInfo,
 }
 
-const CACHE_VERSION: u32 = 3;
+/// Bumped to 4 when reference (.refi/.refx) and devotional (.devi/.devx)
+/// modules joined the scan — a v3 cache has no entries for them, so it must be
+/// discarded rather than reused.
+const CACHE_VERSION: u32 = 4;
 
 fn cache_file_path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")
@@ -104,6 +107,10 @@ pub fn scan_modules(esword_path: Option<String>) -> Result<Vec<ModuleInfo>, Stri
         ("dctx", "dictionary"),
         ("lexi", "lexicon"),
         ("lexx", "lexicon"),
+        ("refi", "reference"),
+        ("refx", "reference"),
+        ("devi", "devotional"),
+        ("devx", "devotional"),
     ];
 
     // Collect candidates from directory (one pass, no SQLite yet)
@@ -283,6 +290,8 @@ fn sample_looks_encrypted(conn: &Connection, kind: &str) -> bool {
         ],
         "dictionary" => &[("Dictionary", "Definition")],
         "lexicon" => &[("Lexicon", "Definition"), ("Dictionary", "Definition")],
+        "reference" => &[("Reference", "Content")],
+        "devotional" => &[("Devotional", "Devotion")],
         _ => &[],
     };
     for (table, col) in probes {

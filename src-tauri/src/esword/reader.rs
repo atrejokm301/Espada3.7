@@ -1982,6 +1982,297 @@ pub fn resolve_word_strongs(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Reference works (.refi/.refx) and devotionals (.devi/.devx)
+//
+// Both are single-table modules, unlike the verse-addressed ones above:
+//   Reference(Chapter TEXT, Content)   — named sections: "PORTADA", "PROLOGO"
+//   Devotional(Month, Day, Devotion)   — one entry per calendar day
+// ---------------------------------------------------------------------------
+
+/// One entry in a reference work's table of contents.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceEntry {
+    /// SQLite rowid — stable handle, since section titles repeat and can be blank.
+    pub index: i64,
+    pub chapter: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceResult {
+    pub index: i64,
+    pub chapter: String,
+    pub source: String,
+    pub title: String,
+    pub text: String,
+    pub module: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevotionalResult {
+    pub month: i32,
+    pub day: i32,
+    pub source: String,
+    pub title: String,
+    pub text: String,
+    pub module: String,
+}
+
+fn module_file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+/// Table of contents for a reference module.
+pub fn list_reference_chapters(module_path: &str) -> Result<Vec<ReferenceEntry>, String> {
+    let path = PathBuf::from(module_path);
+    with_conn(&path, |conn, path_key| {
+        if !table_exists_cached(conn, path_key, "Reference") {
+            return Err("Este módulo no tiene tabla Reference".into());
+        }
+        let mut stmt = conn
+            .prepare("SELECT rowid, [Chapter] FROM [Reference] ORDER BY rowid")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                let idx: i64 = row.get(0)?;
+                let raw: Value = row.get(1)?;
+                Ok((idx, raw))
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut out = Vec::new();
+        for r in rows.flatten() {
+            let (idx, raw) = r;
+            // Section titles carry the same entity/nbsp noise as the body text.
+            let title = cell_to_text(&raw).unwrap_or_default();
+            let title = title.trim().to_string();
+            out.push(ReferenceEntry {
+                index: idx,
+                chapter: if title.is_empty() {
+                    format!("Sección {idx}")
+                } else {
+                    title
+                },
+            });
+        }
+        Ok(out)
+    })
+}
+
+/// One section of a reference module, addressed by the rowid from
+/// [`list_reference_chapters`].
+pub fn get_reference_chapter(
+    module_path: &str,
+    index: i64,
+) -> Result<Option<ReferenceResult>, String> {
+    let path = PathBuf::from(module_path);
+    with_conn(&path, |conn, path_key| {
+        if !table_exists_cached(conn, path_key, "Reference") {
+            return Err("Este módulo no tiene tabla Reference".into());
+        }
+        let (title, abbr) = module_labels_cached(conn, &path);
+        let module = module_file_name(&path);
+
+        let mut stmt = conn
+            .prepare("SELECT [Chapter], [Content] FROM [Reference] WHERE rowid = ?1 LIMIT 1")
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map([index], |row| {
+                let ch: Value = row.get(0)?;
+                let body: Value = row.get(1)?;
+                Ok((ch, body))
+            })
+            .map_err(|e| e.to_string())?;
+
+        let Some(Ok((ch, body))) = rows.next() else {
+            return Ok(None);
+        };
+        let Some(text) = cell_to_text(&body) else {
+            return Ok(None);
+        };
+        let chapter = cell_to_text(&ch).unwrap_or_default().trim().to_string();
+        Ok(Some(ReferenceResult {
+            index,
+            chapter: if chapter.is_empty() {
+                format!("Sección {index}")
+            } else {
+                chapter
+            },
+            source: abbr,
+            title,
+            text,
+            module,
+        }))
+    })
+}
+
+/// Which (month, day) pairs a devotional actually covers.
+pub fn list_devotional_days(module_path: &str) -> Result<Vec<(i32, i32)>, String> {
+    let path = PathBuf::from(module_path);
+    with_conn(&path, |conn, path_key| {
+        if !table_exists_cached(conn, path_key, "Devotional") {
+            return Err("Este módulo no tiene tabla Devotional".into());
+        }
+        let mut stmt = conn
+            .prepare("SELECT [Month], [Day] FROM [Devotional] ORDER BY [Month], [Day]")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?)))
+            .map_err(|e| e.to_string())?;
+        Ok(rows.flatten().collect())
+    })
+}
+
+/// The devotional entry for a calendar day.
+pub fn get_devotional(
+    module_path: &str,
+    month: i32,
+    day: i32,
+) -> Result<Option<DevotionalResult>, String> {
+    let path = PathBuf::from(module_path);
+    with_conn(&path, |conn, path_key| {
+        if !table_exists_cached(conn, path_key, "Devotional") {
+            return Err("Este módulo no tiene tabla Devotional".into());
+        }
+        let (title, abbr) = module_labels_cached(conn, &path);
+        let module = module_file_name(&path);
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT [Devotion] FROM [Devotional] \
+                 WHERE [Month] = ?1 AND [Day] = ?2 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut rows = stmt
+            .query_map([month, day], |row| row.get::<_, Value>(0))
+            .map_err(|e| e.to_string())?;
+
+        let Some(Ok(body)) = rows.next() else {
+            return Ok(None);
+        };
+        let Some(text) = cell_to_text(&body) else {
+            return Ok(None);
+        };
+        Ok(Some(DevotionalResult {
+            month,
+            day,
+            source: abbr,
+            title,
+            text,
+            module,
+        }))
+    })
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    use crate::esword::scan_modules;
+
+    fn modules_of(kind: &str) -> Vec<String> {
+        match scan_modules(None) {
+            Ok(all) => all
+                .into_iter()
+                .filter(|m| m.module_type == kind && !m.encrypted)
+                .map(|m| m.path)
+                .collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    #[test]
+    fn reference_modules_are_catalogued_and_readable() {
+        let paths = modules_of("reference");
+        if paths.is_empty() {
+            eprintln!("skip: no reference modules installed");
+            return;
+        }
+        eprintln!("reference modules: {}", paths.len());
+
+        let mut read = 0usize;
+        for path in paths.iter().take(25) {
+            let sections = match list_reference_chapters(path) {
+                Ok(s) => s,
+                Err(e) => panic!("{path}: {e}"),
+            };
+            assert!(!sections.is_empty(), "{path}: empty table of contents");
+            for entry in &sections {
+                assert!(
+                    !entry.chapter.trim().is_empty(),
+                    "{path}: blank section title at {}",
+                    entry.index
+                );
+            }
+            // Every section the contents list advertises must actually open.
+            for entry in sections.iter().take(3) {
+                let got = get_reference_chapter(path, entry.index)
+                    .unwrap_or_else(|e| panic!("{path} #{}: {e}", entry.index));
+                if let Some(res) = got {
+                    assert_eq!(res.index, entry.index);
+                    read += 1;
+                }
+            }
+        }
+        assert!(read > 0, "no reference section produced readable text");
+        eprintln!("reference sections read: {read}");
+    }
+
+    #[test]
+    fn devotionals_cover_the_calendar() {
+        let paths = modules_of("devotional");
+        if paths.is_empty() {
+            eprintln!("skip: no devotional modules installed");
+            return;
+        }
+        eprintln!("devotional modules: {}", paths.len());
+
+        for path in &paths {
+            let days = match list_devotional_days(path) {
+                Ok(d) => d,
+                Err(e) => panic!("{path}: {e}"),
+            };
+            assert!(!days.is_empty(), "{path}: no devotional days");
+            for (m, d) in &days {
+                assert!((1..=12).contains(m), "{path}: month {m} out of range");
+                assert!((1..=31).contains(d), "{path}: day {d} out of range");
+            }
+            // January 1st is the one entry every devotional in the library has.
+            let jan1 = get_devotional(path, 1, 1).unwrap_or_else(|e| panic!("{path}: {e}"));
+            let jan1 = jan1.unwrap_or_else(|| panic!("{path}: no entry for 1 Jan"));
+            assert!(!jan1.text.trim().is_empty(), "{path}: empty 1 Jan text");
+        }
+    }
+
+    #[test]
+    fn missing_entries_are_none_not_errors() {
+        let refs = modules_of("reference");
+        if let Some(path) = refs.first() {
+            // rowid 0 never exists in SQLite.
+            assert!(matches!(get_reference_chapter(path, 0), Ok(None)));
+        }
+        let devs = modules_of("devotional");
+        if let Some(path) = devs.first() {
+            assert!(matches!(get_devotional(path, 13, 1), Ok(None)));
+        }
+    }
+
+    #[test]
+    fn wrong_module_type_reports_clearly() {
+        let bibles = modules_of("bible");
+        if let Some(path) = bibles.first() {
+            let err = list_reference_chapters(path).unwrap_err();
+            assert!(err.contains("Reference"), "unexpected error: {err}");
+            let err = list_devotional_days(path).unwrap_err();
+            assert!(err.contains("Devotional"), "unexpected error: {err}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

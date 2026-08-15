@@ -150,10 +150,17 @@
     commentaries: [],
     dictionaries: [],
     lexicons: [],
+    references: [],
+    devotionals: [],
     bible: null,
     cmt: null,
     dict: null,
     lex: null,
+    ref: null,               // selected reference work (.refi)
+    dev: null,               // selected devotional (.devi)
+    refToc: [],              // [{ index, chapter }] for state.ref
+    refIndex: null,          // open section rowid
+    devDate: null,           // { month, day } — defaults to today
     bookNumber: 1,
     chapter: 1,
     verses: [],
@@ -3514,6 +3521,249 @@
     box.classList.add("open");
   }
 
+  /* ---------- Reference works (.refi) and devotionals (.devi) ---------- */
+
+  var MONTHS_ES = [
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+  ];
+
+  var DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+  /// Older .refx/.devx modules are e-Sword-encrypted; say so plainly instead of
+  /// rendering the placeholder text as if it were content.
+  function isCipherText(t) {
+    return !t || t.indexOf("[Módulo cifrado") === 0 || t.indexOf("[Contenido binario") === 0;
+  }
+
+  function cipherNoticeHtml(kind) {
+    return '<div class="error">Este módulo está <b>cifrado por e-Sword</b> ' +
+      "(formato antiguo <b>." + kind + "x</b>).<br/>" +
+      "No es un fallo de la app: solo e-Sword puede descifrarlo. " +
+      "Si tenés la versión moderna <b>." + kind + "i</b> del mismo recurso, usá esa.</div>";
+  }
+
+  function renderReferenceToc() {
+    var box = el("ref-toc");
+    if (!box) return;
+    box.innerHTML = "";
+    if (!state.refToc.length) {
+      box.innerHTML = '<p class="study-side-hint">Esta obra no tiene secciones.</p>';
+      return;
+    }
+    for (var i = 0; i < state.refToc.length; i++) {
+      (function (entry) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "toc-item" + (entry.index === state.refIndex ? " active" : "");
+        b.textContent = entry.chapter;
+        b.title = entry.chapter;
+        b.onclick = function () { openReferenceSection(entry.index); };
+        box.appendChild(b);
+      })(state.refToc[i]);
+    }
+  }
+
+  function openReferenceSection(index) {
+    if (!state.ref) return;
+    var content = el("ref-content");
+    state.refIndex = index;
+    renderReferenceToc();
+    if (content) content.innerHTML = '<div class="status">Cargando sección…</div>';
+    invoke("get_reference_chapter", { modulePath: state.ref.path, index: index })
+      .then(function (res) {
+        if (!content) return;
+        if (!res) {
+          content.innerHTML = '<div class="status">Esta sección está vacía.</div>';
+          return;
+        }
+        if (isCipherText(res.text)) {
+          content.innerHTML = cipherNoticeHtml("ref");
+          return;
+        }
+        content.innerHTML = "";
+        var div = document.createElement("div");
+        div.className = "entry";
+        div.innerHTML = '<div class="meta"></div><div class="body"></div>';
+        div.querySelector(".meta").textContent =
+          res.chapter + " · " + (res.title || res.source || "");
+        div.querySelector(".body").innerHTML = formatRichText(res.text || "");
+        content.appendChild(div);
+        el("ref-status").textContent =
+          moduleLabelPlain(state.ref) + " — " + res.chapter;
+      })
+      .catch(function (e) {
+        if (content) {
+          content.innerHTML = '<div class="error">' + escapeHtml(String(e.message || e)) + "</div>";
+        }
+      });
+  }
+
+  function loadReferenceModule(keepIndex) {
+    var content = el("ref-content");
+    if (!state.ref) {
+      el("ref-status").textContent = "No hay obras de referencia instaladas.";
+      if (content) {
+        content.innerHTML =
+          '<div class="status">Las obras de referencia son módulos <b>.refi</b> ' +
+          "de e-Sword (prólogos, introducciones, artículos).</div>";
+      }
+      el("ref-toc").innerHTML = "";
+      return;
+    }
+    el("ref-status").textContent = "Cargando " + moduleLabelPlain(state.ref) + "…";
+    if (content) content.innerHTML = '<div class="status">Cargando contenido…</div>';
+    invoke("list_reference_chapters", { modulePath: state.ref.path })
+      .then(function (rows) {
+        state.refToc = rows || [];
+        if (!state.refToc.length) {
+          state.refIndex = null;
+          renderReferenceToc();
+          el("ref-status").textContent = moduleLabelPlain(state.ref);
+          if (content) content.innerHTML = '<div class="status">Esta obra no tiene secciones.</div>';
+          return;
+        }
+        var want = state.refToc[0].index;
+        for (var i = 0; i < state.refToc.length; i++) {
+          if (state.refToc[i].index === keepIndex) { want = keepIndex; break; }
+        }
+        openReferenceSection(want);
+      })
+      .catch(function (e) {
+        state.refToc = [];
+        renderReferenceToc();
+        el("ref-status").textContent = "Error al abrir el módulo.";
+        if (content) {
+          content.innerHTML = '<div class="error">' + escapeHtml(String(e.message || e)) + "</div>";
+        }
+      });
+  }
+
+  function todayMonthDay() {
+    var now = new Date();
+    return { month: now.getMonth() + 1, day: now.getDate() };
+  }
+
+  function fillDevControls() {
+    var mSel = el("dev-month");
+    var dSel = el("dev-day");
+    if (!mSel || !dSel || !state.devDate) return;
+    if (mSel.options.length !== 12) {
+      mSel.innerHTML = "";
+      for (var m = 0; m < 12; m++) {
+        var om = document.createElement("option");
+        om.value = String(m + 1);
+        om.textContent = MONTHS_ES[m];
+        mSel.appendChild(om);
+      }
+    }
+    var days = DAYS_IN_MONTH[state.devDate.month - 1] || 31;
+    if (dSel.options.length !== days) {
+      dSel.innerHTML = "";
+      for (var d = 1; d <= days; d++) {
+        var od = document.createElement("option");
+        od.value = String(d);
+        od.textContent = String(d);
+        dSel.appendChild(od);
+      }
+    }
+    if (state.devDate.day > days) state.devDate.day = days;
+    mSel.value = String(state.devDate.month);
+    dSel.value = String(state.devDate.day);
+  }
+
+  function stepDevotionalDay(delta) {
+    if (!state.devDate) state.devDate = todayMonthDay();
+    var m = state.devDate.month;
+    var d = state.devDate.day + delta;
+    if (d < 1) {
+      m = m === 1 ? 12 : m - 1;
+      d = DAYS_IN_MONTH[m - 1];
+    } else if (d > (DAYS_IN_MONTH[m - 1] || 31)) {
+      m = m === 12 ? 1 : m + 1;
+      d = 1;
+    }
+    state.devDate = { month: m, day: d };
+    fillDevControls();
+    loadDevotional();
+  }
+
+  function renderDevotionalSideRail() {
+    var box = el("dev-side-list");
+    if (!box) return;
+    box.innerHTML = "";
+    var others = state.devotionals.filter(function (m) {
+      return !state.dev || m.path !== state.dev.path;
+    });
+    if (!others.length) {
+      box.innerHTML = '<p class="study-side-hint">No hay otros devocionarios.</p>';
+      return;
+    }
+    for (var i = 0; i < others.length; i++) {
+      (function (mod) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "toc-item";
+        b.textContent = moduleLabelPlain(mod);
+        b.title = mod.title || mod.filename;
+        b.onclick = function () {
+          state.dev = mod;
+          var sel = el("sel-mod");
+          if (sel && state.tab === "devocional") sel.value = mod.path;
+          renderDevotionalSideRail();
+          loadDevotional();
+        };
+        box.appendChild(b);
+      })(others[i]);
+    }
+  }
+
+  function loadDevotional() {
+    var content = el("dev-content");
+    if (!state.dev) {
+      el("dev-status").textContent = "No hay devocionarios instalados.";
+      if (content) {
+        content.innerHTML =
+          '<div class="status">Los devocionarios son módulos <b>.devi</b> ' +
+          "de e-Sword, con una lectura para cada día del año.</div>";
+      }
+      return;
+    }
+    if (!state.devDate) state.devDate = todayMonthDay();
+    var m = state.devDate.month;
+    var d = state.devDate.day;
+    var label = d + " de " + MONTHS_ES[m - 1];
+    el("dev-status").textContent = moduleLabelPlain(state.dev) + " — " + label;
+    if (content) content.innerHTML = '<div class="status">Cargando lectura…</div>';
+    invoke("get_devotional", { modulePath: state.dev.path, month: m, day: d })
+      .then(function (res) {
+        if (!content) return;
+        if (!res) {
+          content.innerHTML =
+            '<div class="status">Este devocionario no tiene lectura para el ' +
+            escapeHtml(label) + ".</div>";
+          return;
+        }
+        if (isCipherText(res.text)) {
+          content.innerHTML = cipherNoticeHtml("dev");
+          return;
+        }
+        content.innerHTML = "";
+        var div = document.createElement("div");
+        div.className = "entry";
+        div.innerHTML = '<div class="meta"></div><div class="body"></div>';
+        div.querySelector(".meta").textContent =
+          label + " · " + (res.title || res.source || "");
+        div.querySelector(".body").innerHTML = formatRichText(res.text || "");
+        content.appendChild(div);
+      })
+      .catch(function (e) {
+        if (content) {
+          content.innerHTML = '<div class="error">' + escapeHtml(String(e.message || e)) + "</div>";
+        }
+      });
+  }
+
   function setTab(tab) {
     state.tab = tab;
     var buttons = document.querySelectorAll("#tabs button");
@@ -3547,6 +3797,28 @@
 
     modbar.classList.add("show");
     wrap.style.display = "block";
+
+    if (tab === "referencia") {
+      // Browsed by section, not searched by term.
+      wrap.style.display = "none";
+      if (!state.ref && state.references.length) state.ref = state.references[0];
+      fillSelect(sel, state.references, function (m) { return m.path; },
+        moduleLabelPlain, state.ref && state.ref.path, null, true);
+      loadReferenceModule(state.refIndex);
+      return;
+    }
+
+    if (tab === "devocional") {
+      wrap.style.display = "none";
+      if (!state.dev && state.devotionals.length) state.dev = state.devotionals[0];
+      if (!state.devDate) state.devDate = todayMonthDay();
+      fillSelect(sel, state.devotionals, function (m) { return m.path; },
+        moduleLabelPlain, state.dev && state.dev.path, null, true);
+      fillDevControls();
+      renderDevotionalSideRail();
+      loadDevotional();
+      return;
+    }
 
     if (tab === "comentario") {
       termInput.placeholder = "Opcional: buscar texto en el módulo…";
@@ -4327,6 +4599,19 @@
           var tl = (el("term-search") && el("term-search").value.trim()) || state.selectedWord || "H1254";
           if (el("term-search")) el("term-search").value = tl;
           runLexiconSearch(tl, true);
+        } else if (state.tab === "referencia") {
+          for (var r = 0; r < state.references.length; r++) {
+            if (state.references[r].path === path) state.ref = state.references[r];
+          }
+          // A different work has different sections; start from its first.
+          state.refIndex = null;
+          loadReferenceModule(null);
+        } else if (state.tab === "devocional") {
+          for (var v = 0; v < state.devotionals.length; v++) {
+            if (state.devotionals[v].path === path) state.dev = state.devotionals[v];
+          }
+          renderDevotionalSideRail();
+          loadDevotional();
         }
       };
     }
@@ -4404,6 +4689,32 @@
     wireXrefOpen(el("btn-to-xref"));
     wireXrefOpen(el("btn-xref-toolbar"));
     if (el("btn-clear-sel")) el("btn-clear-sel").onclick = clearSelection;
+
+    // Devotional date controls
+    if (el("dev-month")) {
+      el("dev-month").onchange = function () {
+        if (!state.devDate) state.devDate = todayMonthDay();
+        state.devDate.month = parseInt(this.value, 10) || 1;
+        fillDevControls();
+        loadDevotional();
+      };
+    }
+    if (el("dev-day")) {
+      el("dev-day").onchange = function () {
+        if (!state.devDate) state.devDate = todayMonthDay();
+        state.devDate.day = parseInt(this.value, 10) || 1;
+        loadDevotional();
+      };
+    }
+    if (el("dev-prev")) el("dev-prev").onclick = function () { stepDevotionalDay(-1); };
+    if (el("dev-next")) el("dev-next").onclick = function () { stepDevotionalDay(1); };
+    if (el("dev-today")) {
+      el("dev-today").onclick = function () {
+        state.devDate = todayMonthDay();
+        fillDevControls();
+        loadDevotional();
+      };
+    }
 
     // Cross-ref modal wiring
     if (el("xref-modal-close")) {
@@ -4644,6 +4955,8 @@
         state.commentaries = state.modules.filter(function (m) { return m.moduleType === "commentary"; });
         state.dictionaries = state.modules.filter(function (m) { return m.moduleType === "dictionary"; });
         state.lexicons = state.modules.filter(function (m) { return m.moduleType === "lexicon"; });
+        state.references = state.modules.filter(function (m) { return m.moduleType === "reference"; });
+        state.devotionals = state.modules.filter(function (m) { return m.moduleType === "devotional"; });
 
         // Keep mini navigation if present so chapter/bible stay synced
         if (mini && mini.bible && mini.bible.path) {

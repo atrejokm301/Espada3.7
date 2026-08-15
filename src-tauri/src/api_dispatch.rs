@@ -2,7 +2,8 @@
 //! JS passes camelCase args (same as Tauri withGlobalTauri).
 
 use crate::esword::{
-    get_chapter, get_commentaries, list_books, list_dictionary_topics, lookup_dictionary,
+    get_chapter, get_commentaries, get_devotional, get_reference_chapter, list_books,
+    list_devotional_days, list_dictionary_topics, list_reference_chapters, lookup_dictionary,
     lookup_lexicon, probe_commentary, probe_dictionary, probe_lexicon, resolve_word_strongs,
     scan_modules, search_bible_word, search_commentaries, ContentProbe, DEFAULT_ESWORD_PATH,
 };
@@ -217,6 +218,40 @@ pub fn dispatch(cmd: &str, args: &Value) -> Result<Value, String> {
             )?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "list_reference_chapters" => {
+            let module_path = arg_str(args, "modulePath")
+                .ok_or_else(|| "modulePath required".to_string())?;
+            let res = list_reference_chapters(&module_path)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "get_reference_chapter" => {
+            let module_path = arg_str(args, "modulePath")
+                .ok_or_else(|| "modulePath required".to_string())?;
+            let index = args
+                .get("index")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "index required".to_string())?;
+            let res = get_reference_chapter(&module_path, index)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "list_devotional_days" => {
+            let module_path = arg_str(args, "modulePath")
+                .ok_or_else(|| "modulePath required".to_string())?;
+            let days = list_devotional_days(&module_path)?;
+            let out: Vec<Value> = days
+                .into_iter()
+                .map(|(m, d)| json!({ "month": m, "day": d }))
+                .collect();
+            serde_json::to_value(out).map_err(|e| e.to_string())
+        }
+        "get_devotional" => {
+            let module_path = arg_str(args, "modulePath")
+                .ok_or_else(|| "modulePath required".to_string())?;
+            let month = arg_i32(args, "month").ok_or_else(|| "month required".to_string())?;
+            let day = arg_i32(args, "day").ok_or_else(|| "day required".to_string())?;
+            let res = get_devotional(&module_path, month, day)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         "probe_modules_content" => {
             let kind = arg_str(args, "kind").unwrap_or_default();
             let paths = arg_str_vec(args, "paths");
@@ -286,6 +321,97 @@ pub fn dispatch(cmd: &str, args: &Value) -> Result<Value, String> {
             serde_json::to_value(out).map_err(|e| e.to_string())
         }
         other => Err(format!("Unknown command: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The front end sends one command string to either Tauri IPC or this
+    /// dispatcher, so anything the UI calls must resolve here too. These names
+    /// are exactly the ones in ui/app.js.
+    const UI_COMMANDS: &[&str] = &[
+        "list_reference_chapters",
+        "get_reference_chapter",
+        "list_devotional_days",
+        "get_devotional",
+    ];
+
+    #[test]
+    fn ui_commands_are_all_known_to_dispatch() {
+        for cmd in UI_COMMANDS {
+            // Missing args, not a missing command: an unknown name is the bug
+            // we are guarding against.
+            let err = dispatch(cmd, &json!({})).unwrap_err();
+            assert!(
+                !err.starts_with("Unknown command"),
+                "{cmd} is not wired into dispatch: {err}"
+            );
+        }
+    }
+
+    fn first_module_of(kind: &str) -> Option<String> {
+        let mods = dispatch("list_esword_modules", &json!({})).ok()?;
+        mods.as_array()?.iter().find_map(|m| {
+            let is_kind = m.get("moduleType").and_then(|v| v.as_str()) == Some(kind);
+            let encrypted = m
+                .get("encrypted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if is_kind && !encrypted {
+                m.get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+    }
+
+    #[test]
+    fn reference_round_trips_through_dispatch() {
+        let Some(path) = first_module_of("reference") else {
+            eprintln!("skip: no reference modules installed");
+            return;
+        };
+        let toc = dispatch("list_reference_chapters", &json!({ "modulePath": path }))
+            .expect("list_reference_chapters");
+        let entries = toc.as_array().expect("array");
+        assert!(!entries.is_empty(), "empty table of contents for {path}");
+
+        let index = entries[0].get("index").and_then(|v| v.as_i64()).expect("index");
+        let section = dispatch(
+            "get_reference_chapter",
+            &json!({ "modulePath": path, "index": index }),
+        )
+        .expect("get_reference_chapter");
+        assert!(
+            section.get("text").and_then(|v| v.as_str()).is_some(),
+            "section {index} of {path} returned no text"
+        );
+    }
+
+    #[test]
+    fn devotional_round_trips_through_dispatch() {
+        let Some(path) = first_module_of("devotional") else {
+            eprintln!("skip: no devotional modules installed");
+            return;
+        };
+        let days = dispatch("list_devotional_days", &json!({ "modulePath": path }))
+            .expect("list_devotional_days");
+        assert!(!days.as_array().expect("array").is_empty());
+
+        let entry = dispatch(
+            "get_devotional",
+            &json!({ "modulePath": path, "month": 1, "day": 1 }),
+        )
+        .expect("get_devotional");
+        let text = entry
+            .get("text")
+            .and_then(|v| v.as_str())
+            .expect("1 Jan text");
+        assert!(!text.trim().is_empty());
     }
 }
 

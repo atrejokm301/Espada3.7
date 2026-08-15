@@ -8,11 +8,14 @@ pub use esword::{
 };
 
 use esword::{
-    get_chapter, get_commentaries, list_books, list_dictionary_topics, lookup_dictionary,
-    lookup_lexicon, probe_commentary, probe_dictionary, probe_lexicon, resolve_word_strongs,
-    scan_modules, search_bible_word as esword_search_bible_word, search_commentaries,
-    BibleSearchHit, CommentaryResult, ContentProbe, DictionaryResult, LexiconResult,
-    ResolveStrongsResult,
+    get_chapter, get_commentaries, get_devotional as esword_get_devotional,
+    get_reference_chapter as esword_get_reference_chapter, list_books,
+    list_devotional_days as esword_list_devotional_days, list_dictionary_topics,
+    list_reference_chapters as esword_list_reference_chapters, lookup_dictionary, lookup_lexicon,
+    probe_commentary, probe_dictionary, probe_lexicon, resolve_word_strongs, scan_modules,
+    search_bible_word as esword_search_bible_word, search_commentaries, BibleSearchHit,
+    CommentaryResult, ContentProbe, DevotionalResult, DictionaryResult, LexiconResult,
+    ReferenceEntry, ReferenceResult, ResolveStrongsResult,
 };
 use serde::Serialize;
 use std::fs::OpenOptions;
@@ -82,6 +85,14 @@ struct AppInfo {
     mode: String,
     esword_path: String,
     host: String,
+}
+
+/// A calendar day a devotional module has an entry for.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DevotionalDay {
+    month: i32,
+    day: i32,
 }
 
 #[tauri::command]
@@ -191,6 +202,38 @@ fn suggest_dictionary_topics(
     limit: Option<i32>,
 ) -> Result<Vec<DictionaryResult>, String> {
     list_dictionary_topics(&module_path, &term, limit.unwrap_or(40))
+}
+
+// Command names must match the `api_dispatch` match arms exactly: the front end
+// sends the same string to Tauri IPC and to the WinUI HTTP sidecar.
+#[tauri::command]
+fn list_reference_chapters(module_path: String) -> Result<Vec<ReferenceEntry>, String> {
+    esword_list_reference_chapters(&module_path)
+}
+
+#[tauri::command]
+fn get_reference_chapter(
+    module_path: String,
+    index: i64,
+) -> Result<Option<ReferenceResult>, String> {
+    esword_get_reference_chapter(&module_path, index)
+}
+
+#[tauri::command]
+fn list_devotional_days(module_path: String) -> Result<Vec<DevotionalDay>, String> {
+    Ok(esword_list_devotional_days(&module_path)?
+        .into_iter()
+        .map(|(month, day)| DevotionalDay { month, day })
+        .collect())
+}
+
+#[tauri::command]
+fn get_devotional(
+    module_path: String,
+    month: i32,
+    day: i32,
+) -> Result<Option<DevotionalResult>, String> {
+    esword_get_devotional(&module_path, month, day)
 }
 
 #[tauri::command]
@@ -403,6 +446,10 @@ pub fn run() {
             search_commentary_term,
             search_bible_word,
             suggest_dictionary_topics,
+            list_reference_chapters,
+            get_reference_chapter,
+            list_devotional_days,
+            get_devotional,
             resolve_strongs,
             probe_modules_content,
             set_window_glass,

@@ -1246,6 +1246,60 @@
       padding: 16px 8px; text-align: center; color: var(--muted); font-size: 13px;
     }
 
+    /* Devotional date bar */
+    .dev-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      margin: 0 0 10px;
+    }
+    .dev-controls select {
+      background: var(--card);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 8px;
+      font: inherit;
+      font-size: 13px;
+    }
+    .dev-controls button {
+      background: var(--card);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 11px;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .dev-controls button:hover {
+      border-color: var(--accent, var(--fg));
+    }
+    /* Table-of-contents entries in the reference side rail */
+    .toc-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.35;
+      cursor: pointer;
+    }
+    .toc-item:hover {
+      border-color: var(--border);
+    }
+    .toc-item.active {
+      border-color: var(--border);
+      background: var(--card);
+      font-weight: 600;
+    }
+
     /* Themes + fonts: modern compact pills (not giant cards) */
     #panel-temas.panel.active {
       display: block;
@@ -2420,6 +2474,8 @@
         <button data-tab="comentario">Comentario</button>
         <button data-tab="diccionario">Diccionario</button>
         <button data-tab="lexico">Léxico</button>
+        <button data-tab="referencia">Referencias</button>
+        <button data-tab="devocional">Devocional</button>
         <button data-tab="temas">Temas</button>
       </nav>
 
@@ -2549,6 +2605,45 @@
               <h2 class="study-side-title">Otros léxicos</h2>
               <p class="study-side-hint" id="lex-side-hint">Léxicos con definición para este término.</p>
               <div class="study-side-list" id="lex-side-list"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-referencia">
+        <div class="status" id="ref-status">Elige una obra de referencia en el menú.</div>
+        <div class="row study-row">
+          <div class="study-main">
+            <div class="card grow" id="ref-content"></div>
+          </div>
+          <aside class="study-side" aria-label="Contenido de la obra">
+            <div class="card study-side-card grow">
+              <h2 class="study-side-title">Contenido</h2>
+              <p class="study-side-hint" id="ref-side-hint">Secciones de esta obra.</p>
+              <div class="study-side-list" id="ref-toc"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-devocional">
+        <div class="status" id="dev-status">Elige un devocionario en el menú.</div>
+        <div class="dev-controls">
+          <button type="button" id="dev-prev" title="Día anterior">‹</button>
+          <select id="dev-month" aria-label="Mes"></select>
+          <select id="dev-day" aria-label="Día"></select>
+          <button type="button" id="dev-next" title="Día siguiente">›</button>
+          <button type="button" id="dev-today">Hoy</button>
+        </div>
+        <div class="row study-row">
+          <div class="study-main">
+            <div class="card grow" id="dev-content"></div>
+          </div>
+          <aside class="study-side" aria-label="Otros devocionarios">
+            <div class="card study-side-card grow">
+              <h2 class="study-side-title">Otros devocionarios</h2>
+              <p class="study-side-hint" id="dev-side-hint">La lectura de este día en otros libros.</p>
+              <div class="study-side-list" id="dev-side-list"></div>
             </div>
           </aside>
         </div>
