@@ -5,16 +5,36 @@ use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::books::book_by_number;
+use super::books::{book_by_number, book_name_by_number};
 use super::catalog::table_exists;
 use super::text::cell_to_text;
 
+/// Escape SQL `LIKE` metacharacters in user input. Paired with `ESCAPE '\'` in
+/// the query. Without this, searching for `%` matched every row in the module.
+fn like_escape(term: &str) -> String {
+    let mut out = String::with_capacity(term.len() + 4);
+    for c in term.chars() {
+        if c == '%' || c == '_' || c == '\\' {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Per-module connection slots. Global map lock is only held briefly so different
 /// modules can be queried in parallel (probes, parallel Bibles, etc.).
-static CONN_CACHE: Lazy<Mutex<HashMap<String, Arc<Mutex<Connection>>>>> =
+/// `u64` is a monotonic use-stamp so eviction is LRU rather than arbitrary — a
+/// 48-module probe sweep used to be able to close the Bible you are reading.
+static CONN_CACHE: Lazy<Mutex<HashMap<String, (u64, Arc<Mutex<Connection>>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+static CONN_TICK: AtomicU64 = AtomicU64::new(0);
+
+const CONN_CACHE_MAX: usize = 48;
 
 /// Schema / labels memoized per module path (avoids repeated sqlite_master / PRAGMA).
 struct SchemaMemo {
@@ -48,25 +68,34 @@ fn with_conn<T>(
     f: impl FnOnce(&Connection, &str) -> Result<T, String>,
 ) -> Result<T, String> {
     let key = path.to_string_lossy().to_string();
+    let stamp = CONN_TICK.fetch_add(1, Ordering::Relaxed);
     let slot = {
         let mut cache = CONN_CACHE
             .lock()
             .map_err(|_| "cache lock poisoned".to_string())?;
-        if let Some(existing) = cache.get(&key) {
-            existing.clone()
+        if let Some(existing) = cache.get_mut(&key) {
+            existing.0 = stamp;
+            existing.1.clone()
         } else {
             let conn = open_ro_conn(path)?;
             let arc = Arc::new(Mutex::new(conn));
-            cache.insert(key.clone(), arc.clone());
-            // Bound cache size so we don't keep hundreds of open FDs forever
-            if cache.len() > 48 {
-                // Drop an arbitrary older entry (not the one we just inserted)
-                let drop_key = cache.keys().find(|k| *k != &key).cloned();
-                if let Some(k) = drop_key {
-                    cache.remove(&k);
-                    if let Ok(mut schema) = SCHEMA_MEMO.lock() {
-                        schema.remove(&k);
+            cache.insert(key.clone(), (stamp, arc.clone()));
+            // Bound cache size so we don't keep hundreds of open FDs forever.
+            // Evict least-recently-used, never the entry we just inserted.
+            while cache.len() > CONN_CACHE_MAX {
+                let drop_key = cache
+                    .iter()
+                    .filter(|(k, _)| *k != &key)
+                    .min_by_key(|(_, (t, _))| *t)
+                    .map(|(k, _)| k.clone());
+                match drop_key {
+                    Some(k) => {
+                        cache.remove(&k);
+                        if let Ok(mut schema) = SCHEMA_MEMO.lock() {
+                            schema.remove(&k);
+                        }
                     }
+                    None => break,
                 }
             }
             arc
@@ -383,41 +412,47 @@ pub fn get_commentaries(
                 }
             }
 
-            // Also pull exact verse if range missed (different schemas)
-            if let Ok(mut stmt) = conn.prepare(
-                "SELECT ChapterBegin, VerseBegin, Comments FROM VerseCommentary \
-                 WHERE Book=?1 AND ChapterBegin=?2 AND VerseBegin=?3 LIMIT 20",
-            ) {
-                if let Ok(rows) =
-                    stmt.query_map(rusqlite::params![book_number, chapter, verse], |row| {
-                        Ok((
-                            row.get::<_, i32>(0)?,
-                            row.get::<_, i32>(1)?,
-                            row.get::<_, Value>(2)?,
-                        ))
-                    })
-                {
-                    for r in rows.flatten() {
-                        let (cb, vb, comments) = r;
-                        // avoid exact dups by reference+prefix
-                        let ref_label = format!("{book_name} {cb}:{vb}");
-                        if results.iter().any(|x| x.reference == ref_label && x.level == "verse")
-                        {
-                            continue;
+            // Also pull exact verse if range missed (different schemas).
+            // Skipped when !has_end — the query above already *is* this query,
+            // so running it again only to discard every row was wasted work.
+            if has_end {
+                if let Ok(mut stmt) = conn.prepare(
+                    "SELECT ChapterBegin, VerseBegin, Comments FROM VerseCommentary \
+                     WHERE Book=?1 AND ChapterBegin=?2 AND VerseBegin=?3 LIMIT 20",
+                ) {
+                    if let Ok(rows) =
+                        stmt.query_map(rusqlite::params![book_number, chapter, verse], |row| {
+                            Ok((
+                                row.get::<_, i32>(0)?,
+                                row.get::<_, i32>(1)?,
+                                row.get::<_, Value>(2)?,
+                            ))
+                        })
+                    {
+                        for r in rows.flatten() {
+                            let (cb, vb, comments) = r;
+                            // avoid exact dups by reference+prefix
+                            let ref_label = format!("{book_name} {cb}:{vb}");
+                            if results
+                                .iter()
+                                .any(|x| x.reference == ref_label && x.level == "verse")
+                            {
+                                continue;
+                            }
+                            push_comment(
+                                &mut results,
+                                comments,
+                                &book_name,
+                                cb,
+                                vb,
+                                cb,
+                                vb,
+                                &abbr,
+                                &title,
+                                "verse",
+                                &module_name,
+                            );
                         }
-                        push_comment(
-                            &mut results,
-                            comments,
-                            &book_name,
-                            cb,
-                            vb,
-                            cb,
-                            vb,
-                            &abbr,
-                            &title,
-                            "verse",
-                            &module_name,
-                        );
                     }
                 }
             }
@@ -629,9 +664,9 @@ pub fn probe_dictionary_fast(module_path: &str, term: &str) -> ContentProbe {
             return Ok(false);
         }
         // Topic / headword only — same rules as lookup (never Definition body)
-        for pat in topic_patterns(term) {
-            let sql = if pat.contains('%') {
-                "SELECT 1 FROM Dictionary WHERE Topic LIKE ?1 LIMIT 1"
+        for (pat, is_like) in topic_patterns(term) {
+            let sql = if is_like {
+                "SELECT 1 FROM Dictionary WHERE Topic LIKE ?1 ESCAPE '\\' LIMIT 1"
             } else {
                 "SELECT 1 FROM Dictionary WHERE Topic = ?1 LIMIT 1"
             };
@@ -679,8 +714,10 @@ pub fn probe_lexicon_fast(module_path: &str, term: &str) -> ContentProbe {
         } else {
             return Ok(false);
         };
-        let sql = format!("SELECT 1 FROM [{table}] WHERE Topic = ?1 OR Topic LIKE ?2 LIMIT 1");
-        let like = format!("{strong}%");
+        let sql = format!(
+            "SELECT 1 FROM [{table}] WHERE Topic = ?1 OR Topic LIKE ?2 ESCAPE '\\' LIMIT 1"
+        );
+        let like = format!("{}%", like_escape(&strong));
         if let Ok(mut stmt) = conn.prepare(&sql) {
             if stmt
                 .query_row(rusqlite::params![strong, like], |_| Ok(1i32))
@@ -757,7 +794,7 @@ pub fn search_bible_word(
     }
     let limit = limit.clamp(1, 120) as usize;
     let term_lower = term.to_lowercase();
-    let like = format!("%{term}%");
+    let like = format!("%{}%", like_escape(term));
 
     with_conn(&path, |conn, path_key| {
         if !table_exists_cached(conn, path_key, "Bible") {
@@ -776,7 +813,7 @@ pub fn search_bible_word(
         let mut stmt = conn
             .prepare(
                 "SELECT Book, Chapter, Verse, Scripture FROM Bible \
-                 WHERE typeof(Scripture)='text' AND Scripture LIKE ?1 \
+                 WHERE typeof(Scripture)='text' AND Scripture LIKE ?1 ESCAPE '\\' \
                  ORDER BY Book, Chapter, Verse \
                  LIMIT ?2",
             )
@@ -810,8 +847,8 @@ pub fn search_bible_word(
             if !text_contains_whole_word(&text, &term_lower) {
                 continue;
             }
-            let book_name = book_by_number(book_n)
-                .map(|b| b.name)
+            let book_name = book_name_by_number(book_n)
+                .map(str::to_string)
                 .unwrap_or_else(|| format!("Libro {book_n}"));
             let snippet = make_word_snippet(&text, &term_lower, 140);
             out.push(BibleSearchHit {
@@ -925,20 +962,23 @@ pub fn search_commentaries(
     if term.is_empty() {
         return Ok(vec![]);
     }
+    // Unclamped LIMIT is dangerous: SQLite reads a negative LIMIT as "no limit",
+    // so a bad argument would pull an entire commentary module into memory.
+    let limit = limit.clamp(1, 200);
     with_conn(&path, |conn, path_key| {
         let (title, abbr) = module_labels_cached(conn, &path);
         let module_name = path
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        let like = format!("%{term}%");
+        let like = format!("%{}%", like_escape(term));
         let mut out = Vec::new();
 
         if table_exists_cached(conn, path_key, "VerseCommentary") {
             // Only text columns — blobs can't be LIKE-searched meaningfully
             if let Ok(mut stmt) = conn.prepare(
                 "SELECT Book, ChapterBegin, VerseBegin, Comments FROM VerseCommentary \
-                 WHERE typeof(Comments)='text' AND Comments LIKE ?1 LIMIT ?2",
+                 WHERE typeof(Comments)='text' AND Comments LIKE ?1 ESCAPE '\\' LIMIT ?2",
             ) {
                 if let Ok(rows) = stmt.query_map(rusqlite::params![like, limit], |row| {
                     Ok((
@@ -951,8 +991,8 @@ pub fn search_commentaries(
                     for r in rows.flatten() {
                         let (b, ch, v, comments) = r;
                         if let Some(text) = usable_text_filter(&comments) {
-                            let book_name = book_by_number(b)
-                                .map(|x| x.name)
+                            let book_name = book_name_by_number(b)
+                                .map(str::to_string)
                                 .unwrap_or_else(|| format!("Libro {b}"));
                             out.push(CommentaryResult {
                                 reference: format!("{book_name} {ch}:{v}"),
@@ -1092,11 +1132,13 @@ fn dict_exact_patterns(term: &str) -> Vec<String> {
     v
 }
 
+/// Prefix patterns. The term is LIKE-escaped so a literal `%` typed by the user
+/// is matched as a character instead of turning into "match everything".
 fn dict_prefix_patterns(term: &str) -> Vec<String> {
-    let t = term.trim();
-    let up = t.to_uppercase();
+    let t = like_escape(term.trim());
+    let up = like_escape(&term.trim().to_uppercase());
     let mut v = vec![format!("{t}%"), format!("{up}%")];
-    let na = strip_accents(&up);
+    let na = like_escape(&strip_accents(&term.trim().to_uppercase()));
     if na != up {
         v.push(format!("{na}%"));
     }
@@ -1105,11 +1147,11 @@ fn dict_prefix_patterns(term: &str) -> Vec<String> {
 }
 
 fn dict_contains_patterns(term: &str) -> Vec<String> {
-    let t = term.trim();
-    let up = t.to_uppercase();
+    let t = like_escape(term.trim());
+    let up = like_escape(&term.trim().to_uppercase());
     // Leading/trailing % only for longer headword discovery inside multi-word titles
     let mut v = vec![format!("%{up}%"), format!("%{t}%")];
-    let na = strip_accents(&up);
+    let na = like_escape(&strip_accents(&term.trim().to_uppercase()));
     if na != up {
         v.push(format!("%{na}%"));
     }
@@ -1135,7 +1177,7 @@ fn push_dict_rows(
         return;
     }
     let sql = if is_like {
-        "SELECT Topic, Definition FROM Dictionary WHERE Topic LIKE ?1 LIMIT ?2"
+        "SELECT Topic, Definition FROM Dictionary WHERE Topic LIKE ?1 ESCAPE '\\' LIMIT ?2"
     } else {
         "SELECT Topic, Definition FROM Dictionary WHERE Topic = ?1 LIMIT ?2"
     };
@@ -1231,6 +1273,8 @@ pub fn lookup_lexicon(
     if term.is_empty() {
         return Ok(vec![]);
     }
+    // Same guard as the dictionary: a negative LIMIT means "unlimited" in SQLite.
+    let limit = limit.clamp(1, 80);
     with_conn(&path, |conn, path_key| {
         let table = if table_exists_cached(conn, path_key, "Lexicon") {
             "Lexicon"
@@ -1248,32 +1292,35 @@ pub fn lookup_lexicon(
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
-        // Build ordered candidates for Topic
-        let mut keys: Vec<String> = Vec::new();
+        // Build ordered candidates for Topic as (pattern, is_like) — see topic_patterns()
+        let mut keys: Vec<(String, bool)> = Vec::new();
         if let Some(s) = normalize_strongs(term) {
-            keys.push(s.clone());
+            keys.push((s.clone(), false));
             // Also with leading zeros variants H01254
             if let Some(rest) = s.get(1..) {
                 if let Ok(n) = rest.parse::<u32>() {
-                    keys.push(format!("{}{n}", &s[..1]));
-                    keys.push(format!("{}{:04}", &s[..1], n));
-                    keys.push(format!("{}{:05}", &s[..1], n));
+                    keys.push((format!("{}{n}", &s[..1]), false));
+                    keys.push((format!("{}{:04}", &s[..1], n), false));
+                    keys.push((format!("{}{:05}", &s[..1], n), false));
                 }
             }
         }
-        keys.push(term.to_string());
-        keys.push(term.to_uppercase());
-        keys.push(format!("{}%", term.to_uppercase()));
+        keys.push((term.to_string(), false));
+        keys.push((term.to_uppercase(), false));
+        keys.push((format!("{}%", like_escape(&term.to_uppercase())), true));
         if let Some(s) = normalize_strongs(term) {
-            keys.push(format!("{s}%"));
+            keys.push((format!("{s}%"), true));
         }
 
-        for key in &keys {
+        for (key, is_like) in &keys {
             if out.len() as i32 >= limit {
                 break;
             }
-            let sql = if key.contains('%') {
-                format!("SELECT Topic, Definition FROM [{table}] WHERE Topic LIKE ?1 LIMIT ?2")
+            let sql = if *is_like {
+                format!(
+                    "SELECT Topic, Definition FROM [{table}] \
+                     WHERE Topic LIKE ?1 ESCAPE '\\' LIMIT ?2"
+                )
             } else {
                 format!("SELECT Topic, Definition FROM [{table}] WHERE Topic = ?1 LIMIT ?2")
             };
@@ -1310,7 +1357,7 @@ pub fn lookup_lexicon(
             let pats = script_search_patterns(term);
             let sql = format!(
                 "SELECT Topic, Definition FROM [{table}] \
-                 WHERE typeof(Definition)='text' AND Definition LIKE ?1 LIMIT 12"
+                 WHERE typeof(Definition)='text' AND Definition LIKE ?1 ESCAPE '\\' LIMIT 12"
             );
             for pat in &pats {
                 if out.len() as i32 >= limit {
@@ -1401,10 +1448,10 @@ fn script_search_patterns(term: &str) -> Vec<String> {
     let mut pats = Vec::new();
 
     if !raw.is_empty() {
-        pats.push(format!("%{raw}%"));
+        pats.push(format!("%{}%", like_escape(raw)));
     }
     if !bare.is_empty() && bare != raw {
-        pats.push(format!("%{bare}%"));
+        pats.push(format!("%{}%", like_escape(&bare)));
     }
 
     // HTML hex entities as stored in Chávez / Strong modules: &#x05D1;&#x05E8;&#x05D0;
@@ -1467,12 +1514,17 @@ fn usable_text_filter(val: &Value) -> Option<String> {
 }
 
 /// Patterns for probes / legacy callers — **Topic headwords only** (no definition body).
-fn topic_patterns(term: &str) -> Vec<String> {
-    let mut v = dict_exact_patterns(term);
-    v.extend(dict_prefix_patterns(term));
+/// Returns `(pattern, is_like)`: the caller can no longer infer LIKE-ness by
+/// looking for a `%`, since escaped user input may legitimately contain one.
+fn topic_patterns(term: &str) -> Vec<(String, bool)> {
+    let mut v: Vec<(String, bool)> = dict_exact_patterns(term)
+        .into_iter()
+        .map(|p| (p, false))
+        .collect();
+    v.extend(dict_prefix_patterns(term).into_iter().map(|p| (p, true)));
     // Only allow contains for longer terms (probe ● for multi-word titles)
     if strip_accents(&term.to_uppercase()).chars().count() >= 4 {
-        v.extend(dict_contains_patterns(term));
+        v.extend(dict_contains_patterns(term).into_iter().map(|p| (p, true)));
     }
     v.dedup();
     v
@@ -1670,12 +1722,15 @@ fn parse_interlinear_tokens(raw: &str) -> Vec<InterlinearToken> {
             continue;
         }
 
-        let mut strongs: Vec<String> = RE_NUM
+        // dedup() only drops *adjacent* duplicates; interlinear segments repeat
+        // the same code non-consecutively (e.g. G846 … G2532 … G846).
+        let mut seen_codes = HashSet::new();
+        let strongs: Vec<String> = RE_NUM
             .captures_iter(before)
             .filter_map(|c| c.get(1).map(|m| normalize_strong_code(m.as_str())))
             .filter(|s| s.len() >= 2)
+            .filter(|s| seen_codes.insert(s.clone()))
             .collect();
-        strongs.dedup();
 
         let greek = RE_GRK
             .captures_iter(before)
@@ -1859,8 +1914,20 @@ pub fn resolve_word_strongs(
                     }
                 }
             } else if word_index >= 0 && (word_index as usize) < tokens.len() {
-                // Positional fallback: N-th Spanish gloss in interlinear
-                chosen.push(&tokens[word_index as usize]);
+                // Positional fallback: N-th Spanish gloss in the interlinear.
+                // Only accept it when the gloss is at least plausibly the same
+                // word — a raw positional guess hands back a confident but wrong
+                // Strong's number, which is worse than reporting "not found".
+                let cand = &tokens[word_index as usize];
+                let cand_norm = normalize_lemma(&cand.spanish);
+                let shared = cand_norm
+                    .chars()
+                    .zip(word_norm.chars())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                if shared >= 3 {
+                    chosen.push(cand);
+                }
             }
 
             if chosen.is_empty() {
@@ -1971,21 +2038,27 @@ mod tests {
             Ok(m) => m,
             Err(_) => return,
         };
-        let bible = modules
+        // Try candidates until one actually yields Genesis 1. Picking a single
+        // module and bailing on error made this test pass without ever
+        // exercising the connection cache it exists to check.
+        let mut picked = None;
+        for m in modules
             .iter()
-            .find(|m| m.module_type == "bible" && !m.filename.to_lowercase().contains("inter"))
-            .or_else(|| modules.iter().find(|m| m.module_type == "bible"));
-        let Some(bible) = bible else { return };
-
-        let t0 = Instant::now();
-        let ch = match get_chapter(&bible.path, 1, 1) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("skip chapter: {e}");
-                return;
+            .filter(|m| m.module_type == "bible" && !m.encrypted)
+            .filter(|m| !m.filename.to_lowercase().contains("inter"))
+        {
+            let t0 = Instant::now();
+            if let Ok(c) = get_chapter(&m.path, 1, 1) {
+                if !c.verses.is_empty() {
+                    picked = Some((m, c, t0.elapsed().as_millis()));
+                    break;
+                }
             }
+        }
+        let Some((bible, ch, first_ms)) = picked else {
+            eprintln!("skip: no bible module returned Génesis 1");
+            return;
         };
-        let first_ms = t0.elapsed().as_millis();
         assert!(!ch.verses.is_empty());
         assert_eq!(ch.book_number, 1);
         assert_eq!(ch.chapter, 1);
@@ -2001,6 +2074,36 @@ mod tests {
         );
         // Second hit should reuse open connection
         assert!(second_ms <= first_ms + 200);
+    }
+
+    #[test]
+    fn like_metacharacters_are_escaped() {
+        assert_eq!(like_escape("amor"), "amor");
+        assert_eq!(like_escape("100%"), r"100\%");
+        assert_eq!(like_escape("a_b"), r"a\_b");
+        assert_eq!(like_escape(r"a\b"), r"a\\b");
+    }
+
+    #[test]
+    fn wildcard_query_does_not_match_every_headword() {
+        let modules = match scan_modules(None) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        let Some(dict) = modules.iter().find(|m| m.module_type == "dictionary") else {
+            eprintln!("skip: no dictionary module");
+            return;
+        };
+        // "%" was interpolated straight into LIKE, so it matched every row.
+        let rows = lookup_dictionary(&dict.path, "%", 25).expect("lookup");
+        eprintln!("dict {} '%' → {} hits", dict.abbreviation, rows.len());
+        for r in &rows {
+            assert!(
+                r.term.contains('%'),
+                "'%' must be a literal, not a wildcard — got topic «{}»",
+                r.term
+            );
+        }
     }
 
     #[test]

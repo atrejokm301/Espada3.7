@@ -24,18 +24,42 @@ pub fn list_books() -> Vec<BookInfo> {
         .collect()
 }
 
+fn to_info(row: &(i32, &str, &str, i32, &str)) -> BookInfo {
+    BookInfo {
+        number: row.0,
+        name: row.1.to_string(),
+        abbr: row.2.to_string(),
+        chapters: row.3,
+        testament: row.4.to_string(),
+    }
+}
+
+/// Book name only — avoids building a `BookInfo` (4 allocations) just to read
+/// one field. Called once per search hit / commentary row, so it adds up.
+pub fn book_name_by_number(n: i32) -> Option<&'static str> {
+    BOOKS
+        .iter()
+        .find(|(num, ..)| *num == n)
+        .map(|(_, name, ..)| *name)
+}
+
 pub fn book_by_number(n: i32) -> Option<BookInfo> {
-    list_books().into_iter().find(|b| b.number == n)
+    // Scan the static table directly instead of materializing all 66 records.
+    BOOKS.iter().find(|(num, ..)| *num == n).map(to_info)
 }
 
 pub fn book_by_name(name: &str) -> Option<BookInfo> {
     let q = normalize(name);
-    list_books().into_iter().find(|b| {
-        normalize(&b.name) == q
-            || normalize(&b.abbr) == q
-            || normalize(&b.name).starts_with(&q)
-            || q.starts_with(&normalize(&b.name))
-    })
+    if q.is_empty() {
+        return None;
+    }
+    BOOKS
+        .iter()
+        .find(|(_, n, abbr, ..)| {
+            let nn = normalize(n);
+            nn == q || normalize(abbr) == q || nn.starts_with(&q) || q.starts_with(&nn)
+        })
+        .map(to_info)
 }
 
 fn normalize(s: &str) -> String {
