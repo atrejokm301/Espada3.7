@@ -1,0 +1,16 @@
+# Host-optimized release defaults for Espada3.7 (macOS).
+# -march=native  → target-cpu=native
+# Extra LLVM/C flags for rusqlite bundled SQLite and other C deps.
+
+[build]
+# Applied on every cargo build; release script may append PGO flags.
+rustflags = [
+  "-C", "target-cpu=native",
+  "-C", "llvm-args=--enable-machine-outliner",
+]
+
+[env]
+# C deps (libsqlite3-sys, etc.): -O3 -march=native -fstrict-aliasing -ffast-math
+# -fno-exceptions/-fno-rtti are C++-oriented; harmless/ignored for pure C.
+CFLAGS = { value = "-O3 -march=native -mtune=native -fstrict-aliasing -ffast-math -fno-exceptions -fno-rtti -fomit-frame-pointer", force = true }
+CXXFLAGS = { value = "-O3 -march=native -mtune=native -fstrict-aliasing -ffast-math -fno-exceptions -fno-rtti -fomit-frame-pointer", force = true }

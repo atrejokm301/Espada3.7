@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Capacidades por defecto de Espada3.7","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-set-effects","core:window:allow-start-dragging","dialog:default","dialog:allow-open","opener:default"]}}

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Espada3.7",
+  "version": "3.7.0",
+  "identifier": "com.asignaciondelcielo.espada37",
+  "build": {
+    "frontendDist": "../ui",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeDevCommand": "python3 -m http.server 1420 --directory ui --bind 127.0.0.1",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Espada3.7",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16.0, "y": 18.0 }
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost"
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "category": "Education",
+    "shortDescription": "Estudio bíblico offline con módulos e-Sword",
+    "longDescription": "Espada3.7 es la versión macOS de Asignación del Cielo Bible: lectura bíblica, paralelas, comentarios, diccionarios y léxicos offline."
+  },
+  "plugins": {}
+}

@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Espada3.7 — Apariencia</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <!-- Cache-bust: bump BUILD_ID whenever UI must force-reload in WKWebView -->
+  <link rel="stylesheet" href="styles.v7.css?v=release-crossref1" />
+</head>
+<body data-theme="true-dark">
+  <div id="app">
+    <!-- Titlebar: drag region for window move (needs allow-start-dragging) -->
+    <header class="titlebar glass" data-tauri-drag-region>
+      <div class="titlebar-left" data-tauri-drag-region>
+        <span class="app-mark" aria-hidden="true" data-tauri-drag-region>▴</span>
+        <span class="app-title" data-tauri-drag-region>Espada3.7</span>
+        <span class="app-sub" id="build-stamp" data-tauri-drag-region title="Release · arrastre la barra de título">· Asignación del Cielo</span>
+      </div>
+      <div class="titlebar-actions" data-no-drag>
+        <button type="button" id="btn-theme" class="icon-btn" data-no-drag title="Apariencia · Temas">🎨</button>
+        <button type="button" id="btn-settings" class="icon-btn" data-no-drag title="Ajustes">⚙</button>
+      </div>
+    </header>
+
+    <!-- Themes live only in the 🎨 picker panel (#panel-theme), not a chrome strip -->
+
+    <!-- Main workspace tabs (synced, not floating e-Sword windows) -->
+    <nav class="workspace-tabs glass" role="tablist" aria-label="Áreas de estudio">
+      <button type="button" class="ws-tab active" data-ws="biblia" role="tab" aria-selected="true">Biblia</button>
+      <button type="button" class="ws-tab" data-ws="comentario" role="tab">Comentario</button>
+      <button type="button" class="ws-tab" data-ws="diccionario" role="tab">Diccionario</button>
+      <button type="button" class="ws-tab" data-ws="lexico" role="tab">Léxico</button>
+      <div class="ws-context" id="ws-context" title="Palabra / Strong activos">
+        <span class="ws-ctx-label">Contexto:</span>
+        <span id="ws-ctx-word">—</span>
+        <span id="ws-ctx-strongs" class="ws-ctx-strongs"></span>
+      </div>
+    </nav>
+
+    <div class="main-layout">
+      <!-- Left: navigation -->
+      <aside class="sidebar glass">
+        <div class="nav-block">
+          <label class="field-label">Libro</label>
+          <select id="sel-book" class="glass-select"></select>
+        </div>
+        <div class="nav-row">
+          <div class="nav-block grow">
+            <label class="field-label">Capítulo</label>
+            <div class="chap-nav">
+              <button type="button" id="btn-prev-ch" class="icon-btn" title="Anterior">‹</button>
+              <select id="sel-chapter" class="glass-select"></select>
+              <button type="button" id="btn-next-ch" class="icon-btn" title="Siguiente">›</button>
+            </div>
+          </div>
+          <div class="nav-block">
+            <label class="field-label">Vers.</label>
+            <button type="button" id="btn-verse-pick" class="glass-btn compact">1</button>
+          </div>
+        </div>
+
+        <div class="nav-block">
+          <label class="field-label">Biblia</label>
+          <select id="sel-bible" class="glass-select" title=""></select>
+        </div>
+
+        <div class="mode-toggle">
+          <button type="button" class="mode-btn active" data-mode="lectura">Lectura</button>
+          <button type="button" class="mode-btn" data-mode="paralela">Paralela</button>
+        </div>
+
+        <div id="parallel-controls" class="parallel-controls hidden">
+          <div class="nav-block">
+            <label class="field-label">Paralela 1</label>
+            <select id="sel-parallel1" class="glass-select"></select>
+          </div>
+          <div class="nav-block">
+            <label class="field-label">Paralela 2</label>
+            <select id="sel-parallel2" class="glass-select"></select>
+          </div>
+        </div>
+
+        <button type="button" id="btn-history" class="glass-btn full">Historial · Recientes</button>
+
+        <div class="nav-block" style="margin-top:8px">
+          <label class="field-label">Notas del capítulo</label>
+          <textarea id="notes-side" class="notes-area side-notes" placeholder="Notas personales…"></textarea>
+        </div>
+
+        <div class="sidebar-footer">
+          <div id="location-label" class="location-label">—</div>
+        </div>
+      </aside>
+
+      <!-- Center: single tabbed workspace (no extra floating windows) -->
+      <main class="reader-pane glass">
+        <div class="reader-toolbar">
+          <div class="header-nav-cluster">
+            <button type="button" id="btn-prev-passage" class="nav-arrow-btn icon-btn" title="Capítulo anterior (‹)">‹</button>
+            <button type="button" id="btn-location-chip" class="location-chip-btn" title="Abrir selector de libro y versículo">
+              <h1 id="chapter-heading" class="chapter-heading">Cargando…</h1>
+            </button>
+            <button type="button" id="btn-last-visited" class="book-history-btn icon-btn" title="Último versículo visitado (Volver al pasaje anterior)">
+              <svg class="ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                <path d="M9 10l-3 3 3 3"/>
+              </svg>
+            </button>
+            <button type="button" id="btn-next-passage" class="nav-arrow-btn icon-btn" title="Capítulo siguiente (›)">›</button>
+          </div>
+          <div class="reader-tools">
+            <button
+              type="button"
+              id="btn-crossrefs"
+              class="icon-btn crossref-btn"
+              title="Referencias cruzadas (pasajes relacionados)"
+              aria-label="Referencias cruzadas"
+            >
+              <svg class="ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M7 7h8a3 3 0 0 1 0 6h-3"/>
+                <path d="M17 17H9a3 3 0 0 1 0-6h3"/>
+                <path d="M8 7l-3 3 3 3"/>
+                <path d="M16 17l3-3-3-3"/>
+              </svg>
+            </button>
+            <span id="sel-info" class="sel-info"></span>
+          </div>
+        </div>
+
+        <!-- Study chrome (module + search) — hidden on Biblia -->
+        <div id="study-chrome" class="study-chrome hidden">
+          <select id="sel-study-module" class="glass-select grow"></select>
+          <div id="commentary-filters" class="commentary-filters hidden">
+            <label class="chk"><input type="checkbox" id="flt-verse" checked /> Versículo</label>
+            <label class="chk"><input type="checkbox" id="flt-chapter" /> Capítulo</label>
+            <label class="chk"><input type="checkbox" id="flt-book" /> Libro</label>
+          </div>
+          <div id="dict-search-row" class="dict-search-row hidden">
+            <input type="search" id="dict-query" class="glass-input grow" placeholder="Buscar…" />
+            <button type="button" id="btn-dict-search" class="glass-btn compact">Buscar</button>
+          </div>
+        </div>
+
+        <!-- Biblia view -->
+        <div id="view-biblia" class="ws-view">
+          <div id="bible-content" class="bible-content" tabindex="0">
+            <div class="empty-state">Seleccione una carpeta de módulos e-Sword para comenzar.</div>
+          </div>
+        </div>
+
+        <!-- Shared study view for Comentario / Diccionario / Léxico -->
+        <div id="view-study" class="ws-view hidden">
+          <div id="study-content" class="study-content study-content-main">
+            <div class="empty-state soft">Seleccione un recurso en las pestañas de arriba.</div>
+          </div>
+        </div>
+      </main>
+
+      <!-- Right: other modules (brief) — not a duplicate of the main tab -->
+      <aside class="study-pane glass context-pane">
+        <div class="context-header">
+          <h2 id="analysis-title">Análisis</h2>
+          <p class="hint-mini" id="analysis-hint">
+            Aquí aparecen <strong>otros</strong> módulos con el mismo tema (resúmenes). El panel central muestra el módulo principal elegido arriba.
+          </p>
+        </div>
+        <div id="analysis-query" class="analysis-query hidden"></div>
+        <div id="link-panel-inline" class="link-panel-inline">
+          <div class="empty-state soft">Seleccione una palabra o un versículo para ver otros recursos.</div>
+        </div>
+        <div class="context-actions">
+          <button type="button" id="btn-clear-word" class="glass-btn full subtle">Quitar selección de palabra</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Soft panels (settings / history / verse picker only — not study popups) -->
+  <div id="overlay" class="overlay hidden"></div>
+
+  <div id="panel-verse-picker" class="soft-panel hidden">
+    <div class="soft-panel-header">
+      <h2>Elegir versículo</h2>
+      <button type="button" class="icon-btn panel-close" data-close>×</button>
+    </div>
+    <div id="verse-grid" class="verse-grid"></div>
+  </div>
+
+  <div id="panel-history" class="soft-panel hidden">
+    <div class="soft-panel-header">
+      <h2>Historial · Recientes</h2>
+      <button type="button" class="icon-btn panel-close" data-close>×</button>
+    </div>
+    <div id="history-list" class="history-list"></div>
+  </div>
+
+  <div id="panel-crossrefs" class="soft-panel hidden" role="dialog" aria-labelledby="crossrefs-title">
+    <div class="soft-panel-header">
+      <h2 id="crossrefs-title">Referencias cruzadas</h2>
+      <button type="button" class="icon-btn panel-close" data-close aria-label="Cerrar">×</button>
+    </div>
+    <div class="crossrefs-toolbar">
+      <div class="crossrefs-from" id="crossrefs-from">—</div>
+      <select id="sel-crossref-source" class="glass-select grow" title="Fuente de referencias"></select>
+    </div>
+    <p class="hint-mini crossrefs-hint" id="crossrefs-hint">
+      Pasajes relacionados (OpenBible / TSK). Clic en una referencia para ir al pasaje.
+    </p>
+    <div id="crossrefs-list" class="crossrefs-list">
+      <div class="empty-state soft">Cargando…</div>
+    </div>
+  </div>
+
+  <div id="panel-settings" class="soft-panel hidden">
+    <div class="soft-panel-header">
+      <h2>Ajustes</h2>
+      <button type="button" class="icon-btn panel-close" data-close>×</button>
+    </div>
+    <div class="settings-body">
+      <label class="field-label">Carpeta de módulos e-Sword</label>
+      <div class="path-row">
+        <input type="text" id="modules-path" class="glass-input grow" placeholder="Ruta de la carpeta…" />
+        <button type="button" id="btn-pick-modules" class="glass-btn">Elegir…</button>
+      </div>
+      <div class="path-row">
+        <button type="button" id="btn-apply-path" class="glass-btn grow">Usar esta ruta</button>
+        <button type="button" id="btn-use-default-espada" class="glass-btn grow">Usar «for mac espada»</button>
+      </div>
+      <p class="hint">
+        Carpeta recomendada:
+        <code>~/Downloads/for mac espada</code>.
+        Interlineales (p. ej. iRV 1960+) enlazan palabras en español con números Strong.
+      </p>
+      <button type="button" id="btn-refresh-modules" class="glass-btn">Actualizar lista de módulos</button>
+      <div class="settings-meta" id="modules-meta"></div>
+    </div>
+  </div>
+
+  <div id="panel-theme" class="soft-panel compact hidden">
+    <div class="soft-panel-header">
+      <h2 id="theme-panel-title">Temas</h2>
+      <button type="button" class="icon-btn panel-close" data-close>×</button>
+    </div>
+    <p class="theme-panel-hint" id="theme-panel-hint">Elija un tema para la lectura. Deslice si no caben todos.</p>
+    <!-- Static fallback; app.v7.js rebuilds from window.ESPADA_THEMES -->
+    <div class="theme-grid" id="theme-grid">
+      <button type="button" class="theme-card" data-theme="true-dark"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">True Dark</span></button>
+      <button type="button" class="theme-card" data-theme="plain-white"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Plain White</span></button>
+      <button type="button" class="theme-card" data-theme="warm-paper"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Warm Paper</span></button>
+      <button type="button" class="theme-card" data-theme="high-contrast"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">High Contrast</span></button>
+      <button type="button" class="theme-card" data-theme="pastel-green"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Pastel Green</span></button>
+      <button type="button" class="theme-card" data-theme="pastel-yellow"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Pastel Yellow</span></button>
+      <button type="button" class="theme-card" data-theme="light-blue"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Light Blue</span></button>
+      <button type="button" class="theme-card" data-theme="frosted-glass"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Frosted Glass</span></button>
+      <button type="button" class="theme-card" data-theme="muted-lila"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Muted Lila</span></button>
+    </div>
+  </div>
+
+  <!-- Soft detail panel (optional deep dive — not separate app windows) -->
+  <div id="panel-link" class="soft-panel link-panel hidden">
+    <div class="soft-panel-header">
+      <h2 id="link-panel-title">Detalle</h2>
+      <button type="button" class="icon-btn panel-close" data-close>×</button>
+    </div>
+    <div id="link-panel-body" class="link-panel-body"></div>
+    <div class="link-panel-actions">
+      <button type="button" id="btn-goto-passage" class="glass-btn hidden">Ir a pasaje</button>
+      <button type="button" id="btn-open-lexicon" class="glass-btn hidden">Abrir en Léxico</button>
+    </div>
+  </div>
+
+  <div id="tooltip" class="tooltip hidden" role="tooltip"></div>
+
+  <div id="ctx-menu" class="ctx-menu hidden" role="menu">
+    <button type="button" data-act="copy">Copiar</button>
+    <button type="button" data-act="share">Compartir</button>
+    <div class="ctx-sep"></div>
+    <button type="button" data-act="lookup">Buscar palabra (Diccionario + Léxico)</button>
+    <div class="ctx-sep"></div>
+    <div class="ctx-label">Resaltar</div>
+    <div class="hl-chips" id="hl-chips">
+      <button type="button" class="hl-chip" data-hl="gold" title="Oro"></button>
+      <button type="button" class="hl-chip" data-hl="sky" title="Cielo"></button>
+      <button type="button" class="hl-chip" data-hl="rose" title="Rosa"></button>
+      <button type="button" class="hl-chip" data-hl="lime" title="Lima"></button>
+      <button type="button" class="hl-chip" data-hl="violet" title="Violeta"></button>
+      <button type="button" class="hl-chip" data-hl="peach" title="Melocotón"></button>
+    </div>
+    <button type="button" data-act="underline">Subrayar</button>
+    <button type="button" data-act="clear">Quitar marcas</button>
+  </div>
+
+  <!-- Themes defined HERE so WebView cache of app.js can never drop them -->
+  <script>
+    window.ESPADA_THEMES = [
+      { id: "true-dark", label: "True Dark" },
+      { id: "plain-white", label: "Plain White" },
+      { id: "warm-paper", label: "Warm Paper" },
+      { id: "high-contrast", label: "High Contrast" },
+      { id: "pastel-green", label: "Pastel Green" },
+      { id: "pastel-yellow", label: "Pastel Yellow" },
+      { id: "light-blue", label: "Light Blue" },
+      { id: "frosted-glass", label: "Frosted Glass" },
+      { id: "muted-lila", label: "Muted Lila" },
+    ];
+  </script>
+  <script src="app.v7.js?v=release-crossref1"></script>
+</body>
+</html>
