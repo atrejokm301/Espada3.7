@@ -1,0 +1,39 @@
+<ref>2Ki 18:13&mdash;19</ref>
+    html: <span class="bible-ref" data-book="2Ki" data-chapter="18" data-verse="13" data-verse-end="19" title="Ver pasaje">2Ki 18:13-19</span>
+    hits: ["2R 18:13-19@12/18/13-19"]
+<ref>G&eacute;n 1:1</ref>
+    html: <span class="bible-ref" data-book="Gén" data-chapter="1" data-verse="1" data-verse-end="1" title="Ver pasaje">Gén 1:1</span>
+    hits: ["Gn 1:1@1/1/1-1"]
+<ref>Joh&nbsp;3:16</ref>
+    html: <span class="bible-ref" data-book="Joh" data-chapter="3" data-verse="16" data-verse-end="16" title="Ver pasaje">Joh 3:16</span>
+    hits: ["Jn 3:16@43/3/16-16"]
+<ref>&#71;&#101;&#110; 1:1</ref>
+    html: <span class="bible-ref" data-book="Gen" data-chapter="1" data-verse="1" data-verse-end="1" title="Ver pasaje">Gen 1:1</span>
+    hits: ["Gn 1:1@1/1/1-1"]
+<ref>Rom 5:8 &amp; 6:1</ref>
+    html: <span class="bible-ref bible-ref-raw" data-raw="Rom 5:8 &amp; 6:1" title="Ver pasaje">Rom 5:8 &amp; 6:1</span>
+    hits: []
+<ref><b>Mt</b> 5:3</ref>
+    html: <span class="bible-ref" data-book="Mt" data-chapter="5" data-verse="3" data-verse-end="3" title="Ver pasaje">Mt 5:3</span>
+    hits: ["Mt 5:3@40/5/3-3"]
+<ref>Jn "3:16" x</ref>
+    html: <span class="bible-ref bible-ref-raw" data-raw="Jn "3:16" x" title="Ver pasaje">Jn "3:16" x</span>
+    hits: []
+<ref>Luk 2:14</ref>
+    html: <span class="bible-ref" data-book="Luk" data-chapter="2" data-verse="14" data-verse-end="14" title="Ver pasaje">Luk 2:14</span>
+    hits: []
+<ref>Jua 3:16</ref>
+    html: <span class="bible-ref" data-book="Jua" data-chapter="3" data-verse="16" data-verse-end="16" title="Ver pasaje">Jua 3:16</span>
+    hits: []
+<ref>Joh 3:16-4:2</ref>
+    html: <span class="bible-ref bible-ref-raw" data-raw="Joh 3:16-4:2" title="Ver pasaje">Joh 3:16-4:2</span>
+    hits: []
+<ref>Psa 23:1-6</ref>
+    html: <span class="bible-ref" data-book="Psa" data-chapter="23" data-verse="1" data-verse-end="6" title="Ver pasaje">Psa 23:1-6</span>
+    hits: ["Sal 23:1-6@19/23/1-6"]
+<ref>Ap 22:21</ref>
+    html: <span class="bible-ref" data-book="Ap" data-chapter="22" data-verse="21" data-verse-end="21" title="Ver pasaje">Ap 22:21</span>
+    hits: ["Ap 22:21@66/22/21-21"]
+&lt;ref&gt;Jn 3:16&lt;/ref&gt;
+    html: Jn 3:16
+    hits: []

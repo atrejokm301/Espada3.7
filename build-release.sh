@@ -39,6 +39,17 @@ for arg in "$@"; do
   esac
 done
 
+# Bundle hygiene: frontendDist (../ui) embeds EVERY file under ui/ into the app binary.
+# UI tests and their recorded fixtures (module text) live in tests/ui — never inside ui/.
+# The one allowed folder is ui/fonts (the bundled reading fonts + licenses, ~6.7 MB, meant to ship).
+UI_SUBDIRS="$(find "$ROOT/ui" -mindepth 1 -type d ! -path "$ROOT/ui/fonts" 2>/dev/null | head -5)"
+if [[ -n "$UI_SUBDIRS" ]]; then
+  echo "ERROR: ui/ contains folders that would ship inside the app:"
+  echo "$UI_SUBDIRS" | sed 's/^/  /'
+  echo "Move tests/fixtures to tests/ui (run them with: bash tests/ui/run.sh)."
+  exit 1
+fi
+
 # Kill any running Espada / dev UI server so we don't test the wrong binary
 echo "==> Stopping old Espada / port 1420..."
 pkill -x espada3_7 2>/dev/null || true

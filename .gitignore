@@ -5,3 +5,7 @@ src-tauri/target/
 *.log
 .vscode/
 .idea/
+
+# Recorded UI-test fixtures hold real module text from the local library (~23 MB).
+# This repo is public: keep them local. Regenerate with: bash tests/ui/recorder/record.sh
+tests/ui/fixtures/

@@ -2,12 +2,15 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
+  <!-- ISS-34: same policy as the release build (tauri.conf.json), so `cargo tauri dev` is covered too.
+       No inline scripts: the theme list lives in themes.js. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; connect-src 'self' ipc: http://ipc.localhost" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Espada3.7 — Apariencia</title>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <!-- Cache-bust: bump BUILD_ID whenever UI must force-reload in WKWebView -->
-  <link rel="stylesheet" href="styles.v7.css?v=release-crossref1" />
+  <link rel="stylesheet" href="styles.v7.css?v=release-index1" />
 </head>
 <body data-theme="true-dark">
   <div id="app">
@@ -132,7 +135,12 @@
 
         <!-- Study chrome (module + search) — hidden on Biblia -->
         <div id="study-chrome" class="study-chrome hidden">
-          <select id="sel-study-module" class="glass-select grow"></select>
+          <select id="sel-study-module" class="glass-select grow" aria-label="Módulo de estudio"></select>
+          <div id="verse-stepper" class="verse-stepper hidden" role="group" aria-label="Versículo del comentario">
+            <button type="button" id="btn-verse-prev" class="icon-btn" title="Versículo anterior (← o Alt+↑)" aria-label="Versículo anterior">‹</button>
+            <span id="verse-stepper-label" class="verse-stepper-label" aria-live="polite">v.1</span>
+            <button type="button" id="btn-verse-next" class="icon-btn" title="Versículo siguiente (→ o Alt+↓)" aria-label="Versículo siguiente">›</button>
+          </div>
           <div id="commentary-filters" class="commentary-filters hidden">
             <label class="chk"><input type="checkbox" id="flt-verse" checked /> Versículo</label>
             <label class="chk"><input type="checkbox" id="flt-chapter" /> Capítulo</label>
@@ -153,6 +161,8 @@
 
         <!-- Shared study view for Comentario / Diccionario / Léxico -->
         <div id="view-study" class="ws-view hidden">
+          <!-- e-Sword style topic index (Diccionario only); app.v7.js fills it -->
+          <nav id="dict-index" class="dict-index hidden" aria-label="Índice de temas"></nav>
           <div id="study-content" class="study-content study-content-main">
             <div class="empty-state soft">Seleccione un recurso en las pestañas de arriba.</div>
           </div>
@@ -257,6 +267,14 @@
       <button type="button" class="theme-card" data-theme="frosted-glass"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Frosted Glass</span></button>
       <button type="button" class="theme-card" data-theme="muted-lila"><span class="theme-swatch" aria-hidden="true"></span><span class="theme-card-label">Muted Lila</span></button>
     </div>
+    <!-- Reading font (fonts bundled in ui/fonts/, OFL). app.v7.js fills #font-grid from READ_FONTS. -->
+    <section class="font-section" aria-labelledby="font-section-title">
+      <h3 class="field-label" id="font-section-title">Fuente de lectura</h3>
+      <p class="theme-panel-hint">Para la Biblia, comentarios, diccionarios, léxicos y notas. Hebreo y griego usan siempre Libertinus Serif, como en iOS. OpenDyslexic, Atkinson y Lexend están pensadas para facilitar la lectura (p. ej. con dislexia).</p>
+      <div class="font-grid" id="font-grid" role="group" aria-labelledby="font-section-title"></div>
+      <p class="font-preview" id="font-preview">«Porque de tal manera amó Dios al mundo, que ha dado a su Hijo unigénito…» — Juan 3:16</p>
+      <p class="font-preview-orig" lang="und">ἀγάπη · λόγος · אַהֲבָה · בְּרֵאשִׁית <span class="font-preview-note">(Libertinus Serif)</span></p>
+    </section>
   </div>
 
   <!-- Soft detail panel (optional deep dive — not separate app windows) -->
@@ -293,20 +311,8 @@
     <button type="button" data-act="clear">Quitar marcas</button>
   </div>
 
-  <!-- Themes defined HERE so WebView cache of app.js can never drop them -->
-  <script>
-    window.ESPADA_THEMES = [
-      { id: "true-dark", label: "True Dark" },
-      { id: "plain-white", label: "Plain White" },
-      { id: "warm-paper", label: "Warm Paper" },
-      { id: "high-contrast", label: "High Contrast" },
-      { id: "pastel-green", label: "Pastel Green" },
-      { id: "pastel-yellow", label: "Pastel Yellow" },
-      { id: "light-blue", label: "Light Blue" },
-      { id: "frosted-glass", label: "Frosted Glass" },
-      { id: "muted-lila", label: "Muted Lila" },
-    ];
-  </script>
-  <script src="app.v7.js?v=release-crossref1"></script>
+  <!-- Theme list first (its own file: no inline script, see the CSP above), then the app. -->
+  <script src="themes.js?v=release-index1"></script>
+  <script src="app.v7.js?v=release-index1"></script>
 </body>
 </html>

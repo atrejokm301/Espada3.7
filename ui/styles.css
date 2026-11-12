@@ -1,7 +1,7 @@
 /* Espada3.7 — Liquid Glass UI */
 
 :root {
-  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+  --font: "Libertinus Griego Hebreo", -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
   --radius: 16px;
   --radius-sm: 10px;
   --radius-lg: 22px;
@@ -26,6 +26,11 @@
   --sel-outline: rgba(100, 180, 255, 0.55);
 }
 
+/* ISS-33: link colour token (pastel themes point it at their darker --heading for AA contrast). */
+body {
+  --link: var(--accent);
+}
+
 /* —— Themes (glass materials) —— */
 body[data-theme="true-dark"] {
   --bg-base: #000000;
@@ -35,7 +40,7 @@ body[data-theme="true-dark"] {
   --glass-soft: rgba(40, 40, 48, 0.4);
   --text: #f2f2f7;
   --text-dim: rgba(242, 242, 247, 0.62);
-  --text-muted: rgba(242, 242, 247, 0.42);
+  --text-muted: rgba(242, 242, 247, 0.55);
   --accent: #7eb6ff;
   --accent-soft: rgba(126, 182, 255, 0.18);
   --heading: #9ec5ff;
@@ -52,8 +57,8 @@ body[data-theme="plain-white"] {
   --glass-strong: rgba(255, 255, 255, 0.86);
   --glass-soft: rgba(255, 255, 255, 0.45);
   --text: #1c1c1e;
-  --text-dim: rgba(28, 28, 30, 0.65);
-  --text-muted: rgba(28, 28, 30, 0.42);
+  --text-dim: rgba(28, 28, 30, 0.76);
+  --text-muted: rgba(28, 28, 30, 0.66);
   --accent: #0a66c2;
   --accent-soft: rgba(10, 102, 194, 0.12);
   --heading: #0a4d8c;
@@ -62,6 +67,7 @@ body[data-theme="plain-white"] {
   --shadow: 0 10px 36px rgba(20, 30, 60, 0.1);
   --chip-border: rgba(0, 0, 0, 0.08);
   --hl-underline: #0a66c2;
+  --woc: #b71c1c;
 }
 
 body[data-theme="pastel-green"] {
@@ -71,8 +77,8 @@ body[data-theme="pastel-green"] {
   --glass-strong: rgba(240, 252, 244, 0.85);
   --glass-soft: rgba(220, 240, 226, 0.5);
   --text: #1a2e22;
-  --text-dim: rgba(26, 46, 34, 0.65);
-  --text-muted: rgba(26, 46, 34, 0.42);
+  --text-dim: rgba(26, 46, 34, 0.76);
+  --text-muted: rgba(26, 46, 34, 0.66);
   --accent: #2d8a5a;
   --accent-soft: rgba(45, 138, 90, 0.14);
   --heading: #1f6b45;
@@ -80,6 +86,8 @@ body[data-theme="pastel-green"] {
   --border: 1px solid rgba(40, 100, 60, 0.12);
   --shadow: 0 10px 36px rgba(30, 80, 50, 0.12);
   --chip-border: rgba(40, 100, 60, 0.12);
+  --woc: #b71c1c;
+  --link: var(--heading);
 }
 
 body[data-theme="pastel-yellow"] {
@@ -89,8 +97,8 @@ body[data-theme="pastel-yellow"] {
   --glass-strong: rgba(255, 252, 236, 0.88);
   --glass-soft: rgba(250, 240, 200, 0.5);
   --text: #2c2610;
-  --text-dim: rgba(44, 38, 16, 0.65);
-  --text-muted: rgba(44, 38, 16, 0.42);
+  --text-dim: rgba(44, 38, 16, 0.76);
+  --text-muted: rgba(44, 38, 16, 0.66);
   --accent: #b8860b;
   --accent-soft: rgba(184, 134, 11, 0.14);
   --heading: #8a6508;
@@ -98,6 +106,8 @@ body[data-theme="pastel-yellow"] {
   --border: 1px solid rgba(140, 110, 20, 0.12);
   --shadow: 0 10px 36px rgba(100, 80, 20, 0.12);
   --chip-border: rgba(140, 110, 20, 0.12);
+  --woc: #b71c1c;
+  --link: var(--heading);
 }
 
 /*
@@ -112,8 +122,8 @@ body[data-theme="warm-paper"] {
   --glass-strong: rgba(252, 249, 244, 0.92);
   --glass-soft: rgba(244, 236, 224, 0.55);
   --text: #33291f;
-  --text-dim: rgba(51, 41, 31, 0.68);
-  --text-muted: rgba(51, 41, 31, 0.44);
+  --text-dim: rgba(51, 41, 31, 0.76);
+  --text-muted: rgba(51, 41, 31, 0.66);
   --accent: #8c5a2e;
   --accent-soft: rgba(140, 90, 46, 0.14);
   --heading: #5c3d20;
@@ -155,8 +165,8 @@ body[data-theme="light-blue"] {
   --glass-strong: rgba(244, 249, 255, 0.88);
   --glass-soft: rgba(220, 235, 250, 0.5);
   --text: #142536;
-  --text-dim: rgba(20, 37, 54, 0.65);
-  --text-muted: rgba(20, 37, 54, 0.42);
+  --text-dim: rgba(20, 37, 54, 0.76);
+  --text-muted: rgba(20, 37, 54, 0.66);
   --accent: #2b6cb0;
   --accent-soft: rgba(43, 108, 176, 0.14);
   --heading: #1a4f8a;
@@ -164,6 +174,7 @@ body[data-theme="light-blue"] {
   --border: 1px solid rgba(40, 90, 150, 0.12);
   --shadow: 0 10px 36px rgba(30, 70, 120, 0.12);
   --chip-border: rgba(40, 90, 150, 0.12);
+  --woc: #b71c1c;
 }
 
 /*
@@ -216,8 +227,8 @@ body[data-theme="muted-lila"] {
   --glass-strong: rgba(250, 244, 255, 0.9);
   --glass-soft: rgba(232, 220, 242, 0.55);
   --text: #2a2234;
-  --text-dim: rgba(42, 34, 52, 0.68);
-  --text-muted: rgba(42, 34, 52, 0.44);
+  --text-dim: rgba(42, 34, 52, 0.76);
+  --text-muted: rgba(42, 34, 52, 0.66);
   --accent: #8f6fa8;
   --accent-soft: rgba(143, 111, 168, 0.16);
   --heading: #6b4f82;
@@ -229,7 +240,8 @@ body[data-theme="muted-lila"] {
   --hl-violet: rgba(160, 120, 200, 0.42);
   --hl-rose: rgba(210, 140, 180, 0.4);
   --sel-outline: rgba(143, 111, 168, 0.5);
-  --woc: #c06080;
+  --woc: #b71c1c;
+  --link: var(--heading);
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -923,9 +935,13 @@ body[data-theme="muted-lila"] .glass {
   transform: scale(1.05);
 }
 
-.crossref-btn:focus-visible {
+/* :focus ring for WebKit < 15.4; hidden for pointer focus where :focus-visible exists */
+.crossref-btn:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+.crossref-btn:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .crossrefs-toolbar {
@@ -1036,7 +1052,40 @@ body[data-theme="muted-lila"] .glass {
 }
 
 .bible-content .empty-state.soft {
-  opacity: 0.85;
+  opacity: 1; /* ISS-33: --text-muted is already the quiet tone (AA) */
+}
+
+/* ISS-26: a failed lookup reads as an error (not as «Sin resultados»): readable text, icon, actions. */
+.study-content .empty-state.error,
+.bible-content .empty-state.error,
+.link-panel-inline .empty-state.error {
+  color: var(--text);
+  text-align: left;
+  padding: 12px 14px;
+  margin: 8px 0;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--woc);
+  background: rgba(232, 93, 93, 0.1); /* WebKit < 16.2: no color-mix() */
+  background: color-mix(in srgb, var(--woc) 10%, transparent);
+}
+.empty-state.error .error-title {
+  font-weight: 650;
+}
+.empty-state.error .error-icon {
+  color: var(--woc);
+}
+.empty-state.error .error-module,
+.empty-state.error .error-detail {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+.empty-state.error .error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .verse {
@@ -1074,14 +1123,33 @@ body[data-theme="muted-lila"] .glass {
   /* body not underlined */
 }
 
+/* ISS-33: words are tappable — pointer + a light hover tint (distinct from the hl-* marks). */
 .verse-body .word {
-  cursor: text;
+  cursor: pointer;
   border-radius: 3px;
+  transition: background 0.15s var(--ease);
+}
+.verse-body .word:hover {
+  background: var(--accent-soft); /* WebKit < 16.2: no color-mix() */
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .verse-body .word.word-selected {
   background: var(--accent-soft);
   outline: 1px solid var(--sel-outline);
+}
+
+/* ISS-20: grammar codes of Strong-tagged Bibles (RVR1960+, LBLA+…) are not reading text. */
+.morph {
+  display: none;
+}
+
+/* Footnote markers: small and quiet; never part of a tapped word. */
+sup.fn {
+  font-size: 0.65em;
+  line-height: 0;
+  color: var(--text-muted);
+  vertical-align: super;
 }
 
 .woc {
@@ -1196,6 +1264,31 @@ body[data-theme="muted-lila"] .glass {
   font-size: 13px;
 }
 
+/* ISS-04: «Strong:» main codes vs «Relacionados:» (neighbours, other candidates). */
+.sync-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.sync-label-secondary {
+  margin-left: 8px;
+}
+
+.chip-strong.chip-secondary {
+  font-weight: 600;
+  color: var(--text-muted);
+  background: transparent;
+}
+
+/* :focus ring for WebKit < 15.4; hidden for pointer focus where :focus-visible exists */
+.chip-strong:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.chip-strong:focus:not(:focus-visible) {
+  outline: none;
+}
+
 /* —— Lexicon interlinear card (original ‖ Spanish) —— */
 .lex-card {
   margin: 0 0 16px;
@@ -1245,7 +1338,16 @@ body[data-theme="muted-lila"] .glass {
   color: var(--accent);
   line-height: 1.25;
   word-break: break-word;
-  font-family: "Times New Roman", "Libertinus Serif", "Noto Serif Hebrew", "Noto Serif", serif;
+  font-family: "Libertinus Griego Hebreo", "Times New Roman", "Noto Serif Hebrew", "Noto Serif", serif;
+}
+/* :focus ring for WebKit < 15.4; hidden for pointer focus where :focus-visible exists */
+.lex-original[data-strong]:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.lex-original[data-strong]:focus:not(:focus-visible) {
+  outline: none;
 }
 .lex-original[data-strong] {
   cursor: pointer;
@@ -1321,7 +1423,7 @@ button.lex-chip:hover {
   font-size: 1.35rem;
   font-weight: 700;
   color: var(--accent);
-  font-family: "Times New Roman", "Noto Serif Hebrew", serif;
+  font-family: "Libertinus Griego Hebreo", "Times New Roman", "Noto Serif Hebrew", serif;
 }
 .ctx-il-sep {
   color: var(--text-muted);
@@ -1370,7 +1472,7 @@ button.lex-chip:hover {
   font-size: 14px;
   font-weight: 700;
   color: var(--accent);
-  font-family: "Times New Roman", "Noto Serif Hebrew", serif;
+  font-family: "Libertinus Griego Hebreo", "Times New Roman", "Noto Serif Hebrew", serif;
   line-height: 1.2;
 }
 .il-unit .il-s {
@@ -1493,7 +1595,7 @@ button.lex-chip:hover {
 .mini-meta {
   font-size: 11px;
   font-weight: 700;
-  color: var(--accent);
+  color: var(--link);
   margin-bottom: 3px;
 }
 
@@ -1501,6 +1603,37 @@ button.lex-chip:hover {
   font-size: 12.5px;
   line-height: 1.4;
   color: var(--text-dim);
+}
+
+/* ISS-19: word tapped inside a commentary — answered here, the commentary keeps its place. */
+.cmt-word-card {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--glass-soft);
+  border: var(--border);
+  border-left: 3px solid var(--accent);
+}
+.cmt-word-entry {
+  margin-top: 8px;
+}
+.cmt-word-entry .study-body {
+  font-size: 13px;
+  line-height: 1.5;
+  max-height: 240px;
+  overflow: auto;
+}
+.cmt-word-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.cmt-show-all {
+  margin-top: 4px;
+}
+.word-like.word-selected {
+  background: var(--accent-soft);
+  outline: 1px solid var(--sel-outline);
 }
 
 .context-actions {
@@ -1535,6 +1668,49 @@ button.lex-chip:hover {
   min-width: 0;
 }
 
+/* ISS-18: ‹ v.16 › — step verse by verse while reading a commentary. */
+.verse-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* :focus ring for WebKit < 15.4; hidden for pointer focus where :focus-visible exists */
+.verse-stepper .icon-btn:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.verse-stepper .icon-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+.verse-stepper .icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.verse-stepper-label {
+  min-width: 48px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--heading);
+  font-variant-numeric: tabular-nums;
+}
+/* Verse text under the commentary banner, and the chapter-note fallback label (ISS-16). */
+.study-verse-text {
+  margin: -4px 0 12px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.study-fallback-note {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  font-size: 13px;
+  color: var(--text);
+}
+
 .commentary-filters {
   display: flex;
   flex-wrap: wrap;
@@ -1566,6 +1742,38 @@ button.lex-chip:hover {
   line-height: 1.55;
 }
 
+/* Same-query re-render: keep the current text, show a small spinner instead of blanking.
+   Takes no layout space (negative margin) and stays visible while scrolled (sticky). */
+.study-content.is-refreshing::before {
+  content: "";
+  display: block;
+  position: sticky;
+  top: 8px;
+  z-index: 1;
+  width: 16px;
+  height: 16px;
+  margin: 0 0 -16px auto;
+  border: 2px solid var(--accent);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: study-refresh-spin 0.9s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+.study-content.is-refreshing > * {
+  opacity: 0.72;
+  transition: opacity 0.2s var(--ease);
+}
+@keyframes study-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Reduced motion: a still ring (the global 0.01ms rule would make the infinite spin jitter). */
+@media (prefers-reduced-motion: reduce) {
+  .study-content.is-refreshing::before {
+    animation: none;
+  }
+}
+
 .study-entry {
   margin-bottom: 14px;
   padding: 10px 12px;
@@ -1579,7 +1787,7 @@ button.lex-chip:hover {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--link);
   margin-bottom: 6px;
 }
 
@@ -1594,7 +1802,7 @@ button.lex-chip:hover {
 .strong-ref,
 .hebrew-run,
 .greek-run {
-  color: var(--accent);
+  color: var(--link);
   cursor: pointer;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 4px;
@@ -1608,10 +1816,15 @@ button.lex-chip:hover {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.bible-ref:focus-visible,
-.strong-ref:focus-visible {
+/* :focus ring for WebKit < 15.4; hidden for pointer focus where :focus-visible exists */
+.bible-ref:focus,
+.strong-ref:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+.bible-ref:focus:not(:focus-visible),
+.strong-ref:focus:not(:focus-visible) {
+  outline: none;
 }
 
 .module-opt-dot::before {
@@ -1946,6 +2159,17 @@ button.lex-chip:hover {
   font-size: 12px;
 }
 
+/* ISS-45: 'ἀγάπη · agápe — ágape, amado, amor' line of the Strong hover preview. */
+.tooltip .tip-lemma {
+  margin: 2px 0 6px;
+  font-weight: 600;
+}
+.tooltip .tip-orig {
+  font-family: "Libertinus Griego Hebreo", "Times New Roman", "Noto Serif Hebrew", "Noto Serif", serif;
+  font-size: 1.15em;
+  color: var(--accent);
+}
+
 .tip-muted {
   font-size: 12px;
   color: var(--text-muted);
@@ -1957,6 +2181,19 @@ button.lex-chip:hover {
   color: var(--text-muted);
   border-top: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
   padding-top: 6px;
+}
+
+/* ISS-25 / ISS-40: partial cross-chapter preview, fallback Bible. */
+.passage-note {
+  margin: -2px 0 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.passage-fallback {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--text);
 }
 
 .passage-head {
@@ -2122,5 +2359,434 @@ button.lex-chip:hover {
   }
   .study-pane {
     max-height: 280px;
+  }
+}
+
+/* —— Reading font (🎨 panel → «Fuente de lectura») ——
+   Fonts are bundled in ui/fonts/ (licenses + sources in README.txt there); the CSP's default-src
+   'self' covers them. With no data-read-font on <html> (= "Sistema") --font-read is unset, so every
+   rule below falls back to var(--font) (the system font for Latin text).
+   Greek and Hebrew: like EspadaSwift (BiblicalScriptFont), ALWAYS Libertinus Serif, whatever Latin
+   font is chosen. "Libertinus Griego Hebreo" is that file limited by unicode-range to the same
+   blocks iOS treats as Hebrew/Greek, and it comes first in --font and in every --font-read, so the
+   browser draws only those characters with it. One Regular file serves every weight (no faux bold),
+   as on iOS. */
+@font-face {
+  font-family: "Libertinus Griego Hebreo";
+  src: url("fonts/LibertinusSerif-Regular.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0370-03FF, U+1F00-1FFF, U+0590-05FF, U+FB1D-FB4F;
+}
+/* The four Latin reading fonts of EspadaSwift (same files). */
+@font-face {
+  font-family: "Google Sans Flex";
+  src: url("fonts/GoogleSansFlex-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Google Sans Flex";
+  src: url("fonts/GoogleSansFlex-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Google Sans Flex";
+  src: url("fonts/GoogleSansFlex-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Google Sans Flex";
+  src: url("fonts/GoogleSansFlex-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Roboto";
+  src: url("fonts/Roboto-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+/* Classic Roboto has no SemiBold: 500–600 → Medium, as BibleFont.semiBold does on iOS. */
+@font-face {
+  font-family: "Roboto";
+  src: url("fonts/Roboto-Medium.ttf") format("truetype");
+  font-weight: 500 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Roboto";
+  src: url("fonts/Roboto-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/Inter-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Roboto Flex";
+  src: url("fonts/RobotoFlex-Regular.ttf") format("truetype");
+  font-weight: 100 1000;
+  font-style: normal;
+  font-display: swap;
+}
+/* Readability fonts. */
+@font-face {
+  font-family: "OpenDyslexic";
+  src: url("fonts/OpenDyslexic-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "OpenDyslexic";
+  src: url("fonts/OpenDyslexic-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "OpenDyslexic";
+  src: url("fonts/OpenDyslexic-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "OpenDyslexic";
+  src: url("fonts/OpenDyslexic-BoldItalic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("fonts/AtkinsonHyperlegibleNext-Variable.ttf") format("truetype");
+  font-weight: 200 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("fonts/AtkinsonHyperlegibleNext-Italic-Variable.ttf") format("truetype");
+  font-weight: 200 800;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Lexend";
+  src: url("fonts/Lexend-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+html[data-read-font="googlesans"] {
+  --font-read: "Libertinus Griego Hebreo", "Google Sans Flex", var(--font);
+}
+html[data-read-font="roboto"] {
+  --font-read: "Libertinus Griego Hebreo", "Roboto", var(--font);
+}
+html[data-read-font="inter"] {
+  --font-read: "Libertinus Griego Hebreo", "Inter", var(--font);
+}
+html[data-read-font="robotoflex"] {
+  --font-read: "Libertinus Griego Hebreo", "Roboto Flex", var(--font);
+}
+html[data-read-font="opendyslexic"] {
+  --font-read: "Libertinus Griego Hebreo", "OpenDyslexic", var(--font);
+}
+html[data-read-font="atkinson"] {
+  --font-read: "Libertinus Griego Hebreo", "Atkinson Hyperlegible Next", var(--font);
+}
+html[data-read-font="lexend"] {
+  --font-read: "Libertinus Griego Hebreo", "Lexend", var(--font);
+}
+
+.bible-content,
+.study-content,
+.dict-index,
+.link-panel-inline,
+.link-panel-body,
+.crossrefs-list,
+.tooltip,
+.notes-area,
+.font-preview {
+  font-family: var(--font-read, var(--font));
+}
+/* Spanish lines that are serif by default follow the chosen reading font. */
+html[data-read-font] :is(.lex-spanish, .lex-translit, .ctx-il-es) {
+  font-family: var(--font-read, var(--font));
+}
+/* OpenDyslexic sets ~1.7× wider than the system font: give the interlinear Spanish gloss
+   (72px + ellipsis) the same room in words, so «unigénito» is not cut to «unigé…». */
+html[data-read-font="opendyslexic"] .il-unit .il-s {
+  max-width: 124px;
+}
+
+.font-section {
+  border-top: var(--border);
+  padding: 12px 16px 0;
+}
+.font-section .field-label {
+  margin: 0 0 4px;
+}
+.font-section .theme-panel-hint {
+  margin: 0 0 8px;
+}
+.font-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.font-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  border: var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  background: var(--glass-soft);
+  color: var(--text);
+}
+.font-card .font-sample {
+  flex: none;
+  width: 32px;
+  text-align: center;
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1;
+}
+.font-card[data-font="googlesans"] .font-sample {
+  font-family: "Google Sans Flex", var(--font);
+}
+.font-card[data-font="roboto"] .font-sample {
+  font-family: "Roboto", var(--font);
+}
+.font-card[data-font="inter"] .font-sample {
+  font-family: "Inter", var(--font);
+}
+.font-card[data-font="robotoflex"] .font-sample {
+  font-family: "Roboto Flex", var(--font);
+}
+.font-card[data-font="opendyslexic"] .font-sample {
+  font-family: "OpenDyslexic", var(--font);
+}
+.font-card[data-font="atkinson"] .font-sample {
+  font-family: "Atkinson Hyperlegible Next", var(--font);
+}
+.font-card[data-font="lexend"] .font-sample {
+  font-family: "Lexend", var(--font);
+}
+/* Same look as .theme-card's 2px outline, but as a shadow so the focus rule below can't hide it. */
+.font-card:hover,
+.font-card.active {
+  box-shadow: 0 0 0 2px var(--accent);
+  background: var(--accent-soft);
+}
+/* :focus ring for WebKit < 15.4; hidden for pointer focus where :focus-visible exists */
+.font-card:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.font-card:focus:not(:focus-visible) {
+  outline: none;
+}
+.font-preview-orig {
+  margin: 8px 0 0;
+  font-family: "Libertinus Griego Hebreo", var(--font);
+  font-size: 17px; /* = .bible-content: Greek/Hebrew at real reading size */
+  color: var(--text-dim);
+}
+.font-preview-orig .font-preview-note {
+  font-family: var(--font);
+  font-size: 12px;
+}
+.font-preview {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--glass-soft);
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+/* Strong bridge (amó → AMOR): the article of the concept, labelled as related. */
+.match-note {
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* —— Diccionario: e-Sword style topic index (user choice 2026-11-11) —— */
+#view-study.has-index {
+  flex-direction: row;
+}
+#view-study.has-index > .study-content {
+  min-width: 0;
+}
+.dict-index {
+  flex: 0 0 clamp(168px, 30%, 248px);
+  /* A flex item without overflow would grow to its longest topic (min-width: auto). */
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0 8px 0 12px;
+  border-right: var(--border);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.dict-index.hidden {
+  display: none;
+}
+.dict-index-head {
+  flex: none;
+  padding: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.dict-index-scroll {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 16px;
+}
+.dict-index-list {
+  display: flex;
+  flex-direction: column;
+}
+.dict-index-row {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.dict-index-row:hover {
+  background: var(--glass-soft);
+}
+.dict-index-row.focus {
+  font-weight: 700;
+  color: var(--accent);
+}
+.dict-index-row[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+/* :focus ring for WebKit < 15.4; hidden for pointer focus where :focus-visible exists */
+.dict-index-row:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.dict-index-row:focus:not(:focus-visible) {
+  outline: none;
+}
+.dict-index-marker {
+  margin: 2px 0;
+  padding: 2px 8px;
+  border-top: 1px dashed var(--accent);
+  color: var(--accent);
+  font-size: 12px;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dict-index-more {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  padding: 4px 8px;
+  border: var(--border);
+  border-radius: 8px;
+  background: var(--glass-soft);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+/* :focus ring for WebKit < 15.4; hidden for pointer focus where :focus-visible exists */
+.dict-index-more:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.dict-index-more:focus:not(:focus-visible) {
+  outline: none;
+}
+.dict-browse-bar {
+  margin: 4px 0 12px;
+}
+@media (max-width: 1100px) {
+  #view-study.has-index {
+    flex-direction: column;
+  }
+  .dict-index {
+    flex: 0 0 auto;
+    height: 168px;
+    border-right: 0;
+    border-bottom: var(--border);
   }
 }

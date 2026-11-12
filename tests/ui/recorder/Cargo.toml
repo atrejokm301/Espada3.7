@@ -1,0 +1,27 @@
+# Fixture recorder for tests/ui (NOT part of the app build).
+# record.sh copies the backend sources (HEAD or working tree) next to main.rs
+# in a temp build dir and runs the real module functions against the real library.
+[package]
+name = "espada_ui_fixture_recorder"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "recorder"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+regex = "1"
+once_cell = "1"
+parking_lot = "0.12"
+encoding_rs = "0.8"
+html-escape = "0.2"
+walkdir = "2"
+thiserror = "2"
+
+[profile.dev]
+opt-level = 2
