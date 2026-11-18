@@ -5,7 +5,8 @@ use crate::esword::{
     get_chapter, get_commentaries, get_devotional, get_reference_chapter, list_books,
     list_devotional_days, list_dictionary_topics, list_reference_chapters, lookup_dictionary,
     lookup_lexicon, probe_commentary, probe_dictionary, probe_lexicon, resolve_word_strongs,
-    scan_modules, search_bible_word, search_commentaries, ContentProbe, DEFAULT_ESWORD_PATH,
+    scan_modules, search_bible_word, search_commentaries, strong_gloss, strong_lemmas, topic_entry,
+    topic_index, ContentProbe, DEFAULT_ESWORD_PATH,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -43,6 +44,11 @@ fn arg_i32(args: &Value, key: &str) -> Option<i32> {
             None
         }
     })
+}
+
+/// A non-negative position or count (`anchor`, `before`, `after`); negatives read as absent.
+fn arg_u32(args: &Value, key: &str) -> Option<u32> {
+    arg_i32(args, key).and_then(|n| u32::try_from(n).ok())
 }
 
 fn arg_bool(args: &Value, key: &str, default: bool) -> bool {
@@ -199,6 +205,41 @@ pub fn dispatch(cmd: &str, args: &Value) -> Result<Value, String> {
             let res = list_dictionary_topics(&module_path, &term, limit)?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "topic_index" => {
+            let module_path = arg_str(args, "modulePath")
+                .ok_or_else(|| "modulePath required".to_string())?;
+            let query = arg_str(args, "query");
+            let res = topic_index(
+                &module_path,
+                query.as_deref(),
+                arg_u32(args, "anchor"),
+                arg_u32(args, "before").unwrap_or(40),
+                arg_u32(args, "after").unwrap_or(80),
+            )?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "strong_gloss" => {
+            let code = arg_str(args, "code").ok_or_else(|| "code required".to_string())?;
+            let module_paths = arg_str_vec(args, "modulePaths");
+            serde_json::to_value(strong_gloss(&code, &module_paths)).map_err(|e| e.to_string())
+        }
+        "strong_lemmas" => {
+            let module_paths = arg_str_vec(args, "modulePaths");
+            if module_paths.is_empty() {
+                return Err("modulePaths required".into());
+            }
+            serde_json::to_value(strong_lemmas(&module_paths)).map_err(|e| e.to_string())
+        }
+        "get_topic_entry" => {
+            let module_path = arg_str(args, "modulePath")
+                .ok_or_else(|| "modulePath required".to_string())?;
+            let rowid = args
+                .get("rowid")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| "rowid required".to_string())?;
+            let res = topic_entry(&module_path, rowid)?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         "resolve_strongs" => {
             let book_number =
                 arg_i32(args, "bookNumber").ok_or_else(|| "bookNumber required".to_string())?;
@@ -336,6 +377,10 @@ mod tests {
         "get_reference_chapter",
         "list_devotional_days",
         "get_devotional",
+        "topic_index",
+        "get_topic_entry",
+        "strong_gloss",
+        "strong_lemmas",
     ];
 
     #[test]
@@ -412,6 +457,63 @@ mod tests {
             .and_then(|v| v.as_str())
             .expect("1 Jan text");
         assert!(!text.trim().is_empty());
+    }
+
+    /// The Índice through the same JSON the UI reads (camelCase field names included).
+    #[test]
+    fn topic_index_round_trips_through_dispatch() {
+        let path = r"C:\Program Files (x86)\e-Sword\01 Diccionario strong.lexi";
+        if !std::path::Path::new(path).is_file() {
+            eprintln!("skip: Strong lexicon not installed");
+            return;
+        }
+        let slice = dispatch(
+            "topic_index",
+            &json!({ "modulePath": path, "query": "G26", "before": 2, "after": 3 }),
+        )
+        .expect("topic_index");
+        assert_eq!(slice["exact"], json!(true));
+        assert_eq!(slice["strongKeyed"], json!(true));
+        assert!(slice["greekStart"].is_u64() && slice["hebrewStart"].is_u64());
+        let rows = slice["rows"].as_array().expect("rows");
+        assert_eq!(rows.len(), 5);
+        let focus = slice["focus"].as_u64().expect("focus");
+        let start = slice["start"].as_u64().expect("start");
+        let row = &rows[(focus - start) as usize];
+        assert_eq!((&row["topic"], &row["lemma"]), (&json!("G26"), &json!("ἀγάπη")));
+
+        let entry = dispatch(
+            "get_topic_entry",
+            &json!({ "modulePath": path, "rowid": row["rowid"] }),
+        )
+        .expect("get_topic_entry");
+        assert_eq!(entry["term"], json!("G26"));
+        assert!(entry["definition"].as_str().unwrap_or("").contains("amor"));
+
+        // A negative anchor is ignored, not wrapped around to a huge position.
+        let s = dispatch(
+            "topic_index",
+            &json!({ "modulePath": path, "anchor": -5, "before": 0, "after": 1 }),
+        )
+        .expect("topic_index");
+        assert_eq!(s["start"], json!(0));
+    }
+
+    #[test]
+    fn strong_gloss_round_trips_through_dispatch() {
+        let path = r"C:\Program Files (x86)\e-Sword\01 Diccionario strong.lexi";
+        if !std::path::Path::new(path).is_file() {
+            eprintln!("skip: Strong lexicon not installed");
+            return;
+        }
+        let g = dispatch("strong_gloss", &json!({ "code": "G26", "modulePaths": [path] }))
+            .expect("strong_gloss");
+        assert_eq!(g["spanish"], json!("ágape, amado, amor"));
+        assert_eq!((&g["translit"], &g["original"]), (&json!("agápe"), &json!("ἀγάπη")));
+        // No source module: nothing, not an error.
+        let none = dispatch("strong_gloss", &json!({ "code": "G26", "modulePaths": [] }))
+            .expect("strong_gloss");
+        assert!(none.is_null());
     }
 }
 

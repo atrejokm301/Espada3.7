@@ -143,6 +143,18 @@
   /** Monotonic token so stale chapter loads don't clobber a newer Bible selection. */
   var _chapterLoadGen = 0;
 
+  /**
+   * Newest-answer-only, per screen: `var isLatest = latest("cmt")` before a request, and
+   * `if (!isLatest()) return;` when its answer arrives. Every module read runs off the
+   * window's thread, so answers can come back out of order (a 280 MB commentary search
+   * answers after the next, quicker one); each screen paints only its newest request.
+   */
+  var latestSeq = {};
+  function latest(key) {
+    var n = (latestSeq[key] = (latestSeq[key] || 0) + 1);
+    return function () { return latestSeq[key] === n; };
+  }
+
   var state = {
     modules: [],
     books: [],
@@ -226,6 +238,39 @@
   var DEFAULT_FONT_ID = "google-sans-flex";
   var WOC_OPEN = "\uE000";
   var WOC_CLOSE = "\uE001";
+  // Section titles marked by the reader (src-tauri/src/esword/sections.rs): where a combined
+  // module moves to another work or author — «Diccionario Strong» / «Léxico Griego-Español
+  // Tuggy» in the Multiléxico, «San Agustín, | de sermone Domini, 1,1» in the Catena Aurea —
+  // or a heading of the work («NOTAS»). formatRichText draws them as section headings.
+  var TITLE_OPEN = String.fromCharCode(0xE002);
+  var TITLE_CLOSE = String.fromCharCode(0xE003);
+  var TITLE_SPLIT = String.fromCharCode(0xE004);
+  var RE_TEXT_MARKS = new RegExp("[" + WOC_OPEN + WOC_CLOSE + TITLE_OPEN + TITLE_CLOSE + "]", "g");
+  var RE_TITLE_MARKS = new RegExp("[" + TITLE_OPEN + TITLE_CLOSE + TITLE_SPLIT + "]", "g");
+
+  // Bible section titles marked inside verse text (src-tauri/src/esword/bible_titles.rs): a
+  // title of this verse (U+E005; U+E008 when the source sets it in italics only, psalm titles)
+  // or of the NEXT verse (U+E007: RV1960-T ends a verse with the title of the next one), each
+  // closed by U+E006. The words stay in the verse text, so word numbers (marks, Strong's) and
+  // the old text are unchanged; the page lifts the titles above their verse.
+  var BH_OPEN = String.fromCharCode(0xE005);
+  var BH_CLOSE = String.fromCharCode(0xE006);
+  var BH_NEXT = String.fromCharCode(0xE007);
+  var BH_MINOR = String.fromCharCode(0xE008);
+  var RE_BH_MARKS = new RegExp("[" + BH_OPEN + BH_CLOSE + BH_NEXT + BH_MINOR + "]", "g");
+  var RE_BH_SPANS = new RegExp("[" + BH_OPEN + BH_NEXT + BH_MINOR + "][^" + BH_CLOSE + "]*" + BH_CLOSE, "g");
+  var RE_BH_ANY = new RegExp("[" + BH_OPEN + BH_NEXT + BH_MINOR + "]");
+  var RE_PARALLEL_PASSAGE = /^\([^()]{1,60}\)$/;
+
+  /** Verse text without its section titles (copy, filter, previews, parallel columns). */
+  function withoutBibleTitles(s) {
+    return String(s || "").replace(RE_BH_SPANS, " ").replace(RE_BH_MARKS, "");
+  }
+
+  /** Module text for a one-line preview: without red-letter or section-title markers. */
+  function plainMarks(s) {
+    return String(s || "").split(TITLE_SPLIT).join(" ").replace(RE_TEXT_MARKS, "");
+  }
   /** Named styles only — CSS vars per theme map these to colors */
   var HL_STYLES = ["gold", "sky", "rose", "lime", "violet", "peach"];
 
@@ -422,7 +467,7 @@
   function getVersePlainText(verseNum) {
     for (var i = 0; i < state.verses.length; i++) {
       if (state.verses[i].verse === verseNum) {
-        return String(state.verses[i].text || "")
+        return withoutBibleTitles(state.verses[i].text)
           .replace(/\uE000|\uE001/g, "")
           .replace(/<[^>]+>/g, "")
           .replace(/\s+/g, " ")
@@ -867,6 +912,22 @@
     }
   }
 
+  /**
+   * Remember the commentary, dictionary and lexicon picked in the menu, so the next visit to
+   * the tab and the next launch use them. Writes only those fields: saveNavPosition() also
+   * stamps the reading history, which a module change must not touch.
+   */
+  function saveStudyModulePrefs() {
+    try {
+      var nav = loadNavPosition();
+      if (!nav || typeof nav !== "object") nav = {};
+      nav.cmtPath = state.cmt ? state.cmt.path : null;
+      nav.dictPath = state.dict ? state.dict.path : null;
+      nav.lexPath = state.lex ? state.lex.path : null;
+      localStorage.setItem(NAV_KEY, JSON.stringify(nav));
+    } catch (e) { /* ignore */ }
+  }
+
   /* ---------- Parallel Bibles prefs ---------- */
   function saveParallelPrefs() {
     try {
@@ -986,6 +1047,7 @@
   }
 
   function loadParallelChapters() {
+    var isLatest = latest("parallel");
     var paths = activeParallelPaths();
     if (!paths.length) {
       state.parallelByPath = {};
@@ -1015,6 +1077,8 @@
           title: res.moduleTitle || res.translation || "",
           translation: res.translation || ""
         });
+        // An older chapter's answer must not show beside the newer one.
+        if (!isLatest()) return;
         var mod = bibleByPath(path);
         state.parallelByPath[path] = {
           verses: verses,
@@ -1023,6 +1087,7 @@
           abbr: bibleLabel(mod)
         };
       }).catch(function (e) {
+        if (!isLatest()) return;
         state.parallelByPath[path] = {
           verses: [],
           map: {},
@@ -1252,6 +1317,7 @@
     }
     box.innerHTML = '<div class="xref-empty">Cargando referencias…</div>';
     xrefState.loading = true;
+    var isLatest = latest("xref");
     invoke("get_verse_commentaries", {
       modulePath: path,
       bookNumber: state.bookNumber,
@@ -1261,6 +1327,7 @@
       includeChapter: false,
       includeBook: false
     }).then(function (rows) {
+      if (!isLatest()) return;
       xrefState.loading = false;
       rows = rows || [];
       if (!rows.length) {
@@ -1291,6 +1358,7 @@
       }
       box.innerHTML = html;
     }).catch(function (e) {
+      if (!isLatest()) return;
       xrefState.loading = false;
       box.innerHTML =
         '<div class="xref-empty">Error: ' + escapeHtml(String(e.message || e)) + "</div>";
@@ -1310,6 +1378,7 @@
     }
     box.innerHTML = '<div class="xref-empty">Buscando «' + escapeHtml(word) + "» en la Biblia…</div>";
     xrefState.loading = true;
+    var isLatest = latest("xref");
     invoke("search_bible_word", {
       modulePath: state.bible.path,
       term: word,
@@ -1318,6 +1387,7 @@
       excludeVerse: state.selectedVerse != null ? state.selectedVerse : undefined,
       limit: 50
     }).then(function (hits) {
+      if (!isLatest()) return;
       xrefState.loading = false;
       hits = hits || [];
       if (sub) {
@@ -1358,6 +1428,7 @@
         box.appendChild(btn);
       }
     }).catch(function (e) {
+      if (!isLatest()) return;
       xrefState.loading = false;
       box.innerHTML =
         '<div class="xref-empty">Error: ' + escapeHtml(String(e.message || e)) + "</div>";
@@ -1440,31 +1511,38 @@
     return normKey(s).replace(/\s+/g, "");
   }
 
+  // tightKey → book number, built once. Resolving a name used to re-normalise all ~400 aliases
+  // and the 66 loaded book names on every call; linkifying a long entry (Thompson «Dios»)
+  // makes thousands of calls and blocked the window 440 ms.
+  var bookAliasIndex = null;
+  var bookNameIndex = null;
+  var bookNameIndexFor = null;
+
   function resolveBookAlias(name) {
     var key = tightKey(name);
     if (!key) return null;
-    // Prefer longer alias matches
-    var best = null;
-    var bestLen = 0;
-    for (var i = 0; i < BOOK_ALIAS_LIST.length; i++) {
-      var b = BOOK_ALIAS_LIST[i];
-      for (var j = 0; j < b.a.length; j++) {
-        var a = tightKey(b.a[j]);
-        if (key === a && a.length >= bestLen) {
-          best = b.n;
-          bestLen = a.length;
-        }
+    if (!bookAliasIndex) {
+      bookAliasIndex = new Map();
+      // Forward order: on a shared spelling the later alias wins, as the old scan did.
+      for (var i = 0; i < BOOK_ALIAS_LIST.length; i++) {
+        var b = BOOK_ALIAS_LIST[i];
+        for (var j = 0; j < b.a.length; j++) bookAliasIndex.set(tightKey(b.a[j]), b.n);
       }
     }
-    // Also match full Spanish names from loaded books
+    // Full Spanish names and abbreviations of the loaded books win over the alias table.
     if (state.books && state.books.length) {
-      for (var k = 0; k < state.books.length; k++) {
-        var bn = tightKey(state.books[k].name);
-        var ba = tightKey(state.books[k].abbr);
-        if (key === bn || key === ba) return state.books[k].number;
+      if (bookNameIndexFor !== state.books) {
+        bookNameIndex = new Map();
+        // Reverse order: on a shared spelling the earlier book wins, as the old scan did.
+        for (var k = state.books.length - 1; k >= 0; k--) {
+          bookNameIndex.set(tightKey(state.books[k].name), state.books[k].number);
+          bookNameIndex.set(tightKey(state.books[k].abbr), state.books[k].number);
+        }
+        bookNameIndexFor = state.books;
       }
+      if (bookNameIndex.has(key)) return bookNameIndex.get(key);
     }
-    return best;
+    return bookAliasIndex.has(key) ? bookAliasIndex.get(key) : null;
   }
 
   function bookDisplayName(num) {
@@ -1633,7 +1711,7 @@
     }
 
     // Greek (basic + extended) — Libertinus via .script-el
-    var reEl = /[\u0370-\u03FF\u1F00-\u1FFF]{2,}/g;
+    var reEl = /[\u0370-\u03FF\u1F00-\u1FFF][\u0370-\u03FF\u1F00-\u1FFF\u0300-\u036F]+/g;
     while ((m = reEl.exec(raw)) !== null) {
       matches.push({
         start: m.index,
@@ -1678,9 +1756,64 @@
   }
 
   /** Escape HTML, WOC red spans, and clickable Bible references. */
+  /**
+   * Module text → HTML: links (formatRichTextRun) plus the section titles the reader marked,
+   * drawn as headings. A heading is a block, so the line breaks around it go; a red-letter run
+   * that crosses one carries on after it.
+   */
   function formatRichText(text) {
     if (!text) return "";
     var raw = String(text);
+    if (raw.indexOf(TITLE_OPEN) < 0) return formatRichTextRun(raw.replace(RE_TITLE_MARKS, ""));
+    var out = "";
+    var pos = 0;
+    var inWoc = false;
+    function wocOpenAtEnd(s) {
+      var open = s.lastIndexOf(WOC_OPEN);
+      return open >= 0 && s.indexOf(WOC_CLOSE, open) < 0;
+    }
+    function run(s) {
+      s = s.replace(RE_TITLE_MARKS, "").replace(/^\n+/, "").replace(/\n+$/, "");
+      if (inWoc) s = WOC_OPEN + s;
+      inWoc = wocOpenAtEnd(s);
+      if (inWoc) s += WOC_CLOSE;
+      return s.replace(new RegExp(WOC_OPEN + WOC_CLOSE, "g"), "") ? formatRichTextRun(s) : "";
+    }
+    while (pos < raw.length) {
+      var a = raw.indexOf(TITLE_OPEN, pos);
+      var b = a < 0 ? -1 : raw.indexOf(TITLE_CLOSE, a + 1);
+      if (b < 0) break; // none left, or cut off by the length cap: plain text
+      out += run(raw.slice(pos, a));
+      var title = raw.slice(a + 1, b);
+      if (title.indexOf(WOC_OPEN) >= 0 || title.indexOf(WOC_CLOSE) >= 0) {
+        inWoc = wocOpenAtEnd((inWoc ? WOC_OPEN : "") + title);
+      }
+      out += sectionHeadHtml(title);
+      pos = b + 1;
+    }
+    return out + run(raw.slice(pos));
+  }
+
+  /**
+   * One section title. «San Agustín, | de sermone Domini, 1,1»: the author, then the work in
+   * italics. A title ending in «:» («Definición Strong:», «BLA Notes:») or an outline step
+   * («A. Verbos», «II. Autor») is a subheading inside the same work: lighter, without the colon,
+   * so only a new work or author gets the banner.
+   */
+  function sectionHeadHtml(title) {
+    var parts = title.replace(RE_TEXT_MARKS, "").split(TITLE_SPLIT);
+    var name = parts[0].replace(/\s+/g, " ").trim();
+    var cite = parts.slice(1).join(" ").replace(/\s+/g, " ").trim();
+    var label = !cite && (/:\s*$/.test(name) || /^(?:[A-Z]|[IVXLC]{1,4}|\d{1,2})[.)]\s+\S/.test(name));
+    if (label) name = name.replace(/\s*:\s*$/, "");
+    if (cite) name = name.replace(/[\s,;:.]+$/, "");
+    return '<div class="sec-head' + (label ? " sec-label" : "") + '" role="heading" aria-level="4">' +
+      '<span class="sec-name">' + escapeHtml(name) + "</span>" +
+      (cite ? '<span class="sec-cite">' + escapeHtml(cite) + "</span>" : "") +
+      "</div>";
+  }
+
+  function formatRichTextRun(raw) {
     // Split by WOC markers so refs inside WOC still work and stay red
     var re = new RegExp(WOC_OPEN + "([\\s\\S]*?)" + WOC_CLOSE, "g");
     var out = "";
@@ -1769,9 +1902,16 @@
     tip.style.top = y + "px";
   }
 
+  // Newest hover preview / click panel: a late answer for an older one is dropped, and an
+  // older walk through the lexicons stops (lookups run off the window's thread now, so
+  // answers can arrive after the pointer has moved on).
+  var tipSeq = 0;
+  var panelLookupSeq = 0;
+
   function hideRefTooltip() {
     var tip = el("ref-tooltip");
     tip.classList.remove("visible");
+    tipSeq++;
   }
 
   /** Prefer Strong’s-named lexicons, then current selection, then rest. */
@@ -1802,25 +1942,36 @@
    * Fetch Strong’s / lemma from lexicons until content is found.
    * Does not permanently cache empty results (so fixing module selection helps).
    */
-  function fetchLexiconEntries(term) {
+  /**
+   * `opts.mods`: search only these modules (a Greek/Hebrew word: the lexicon in use only —
+   * each search reads the module's definitions). `opts.stale()`: true once the caller has
+   * moved on; the walk then stops instead of querying the remaining lexicons.
+   */
+  function fetchLexiconEntries(term, opts) {
+    opts = opts || {};
+    var stale = opts.stale || function () { return false; };
     term = String(term || "").trim();
     if (!term) {
       return Promise.reject(new Error("Sin término Strong’s / lema."));
     }
-    var mods = orderedLexiconModules();
+    var mods = opts.mods || orderedLexiconModules();
     if (!mods.length) {
       return Promise.reject(new Error(
         "No hay léxicos en e-Sword. Abrí Léxico y elegí Strong ° u otro módulo."
       ));
     }
 
-    var cacheHitKey = "_any|" + term.toUpperCase();
+    // Keyed by the reader's lexicon too: it is tried first, so after switching lexicons the
+    // quick view must not keep showing the entry found in the old one.
+    var cacheHitKey = (opts.mods ? "_only|" : "_any|") +
+      (state.lex ? state.lex.path : "") + "|" + term.toUpperCase();
     if (lexCache[cacheHitKey] && lexCache[cacheHitKey].rows && lexCache[cacheHitKey].rows.length) {
       return Promise.resolve(lexCache[cacheHitKey]);
     }
 
     var i = 0;
     function tryNext() {
+      if (stale()) return Promise.resolve({ rows: [], moduleTitle: "", stale: true });
       if (i >= mods.length) {
         return Promise.resolve({
           rows: [],
@@ -1868,6 +2019,9 @@
         "</span>";
     }
     var html = "";
+    // A Strong's number gets its Spanish words up top (filled by fillGlossSlots).
+    var code = normStrongCode(rows[0] && rows[0].term);
+    if (code) html += glossLineHtml(code);
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
       // Definitions may contain more refs/Strong’s — linkify them too
@@ -1892,6 +2046,8 @@
     var kind = target.getAttribute("data-kind") || "bible";
     var label = target.getAttribute("data-label") || "";
     var tip = el("ref-tooltip");
+    var token = ++tipSeq;
+    var current = function () { return token === tipSeq; };
     el("rt-title").textContent = label;
     el("rt-body").innerHTML = '<span class="rt-loading">Cargando…</span>';
     el("rt-meta").textContent = "";
@@ -1913,23 +2069,54 @@
         (state.bible.abbreviation || state.bible.filename) + " · vista rápida";
       fetchChapterVerses(book, chapter)
         .then(function (pack) {
+          if (!current()) return;
           el("rt-meta").textContent =
             (pack.translation || pack.title || "") + " · no mueve tu capítulo abierto";
           el("rt-body").innerHTML = formatVerseLines(versesInRange(pack, v1, v2));
           positionTooltip(clientX, clientY);
         })
         .catch(function (e) {
+          if (!current()) return;
           el("rt-body").innerHTML =
             '<span class="rt-loading">' + escapeHtml(String(e.message || e)) + "</span>";
         });
       return;
     }
 
-    // strong | lemma → try lexicons until we get content
     var term = target.getAttribute("data-term") || "";
+    var viaWord = null; // a Greek/Hebrew word shown through its number: { word, codes }
+    if (kind === "lemma") {
+      var found = lemmaCodes(term);
+      if (found && found.pick) {
+        viaWord = { word: term, codes: found.codes };
+        term = found.pick;
+      } else if (found && found.codes.length) {
+        // An accent-free spelling of several numbers: list them, open none.
+        el("rt-meta").textContent = "Varios números";
+        el("rt-body").innerHTML = codeChoicesHtml(term, found.codes);
+        positionTooltip(clientX, clientY);
+        return;
+      } else {
+        // An unknown word starts no lookup on hover: finding it means reading a module's
+        // definitions (~0.7 s in Multiléxico; resting the pointer on words queued those
+        // reads ahead of everything else). A click searches (openStudyPanel).
+        if (!found) loadLemmaIndex();
+        var lexName = escapeHtml(state.lex ? (state.lex.abbreviation || state.lex.filename || "") : "el léxico");
+        el("rt-meta").textContent = "Clic para buscar";
+        el("rt-body").innerHTML = '<span class="rt-loading">' + (found
+          ? "«" + escapeHtml(term) + "» no es una palabra de diccionario (puede ser una forma conjugada o " +
+            "declinada). Clic para buscarla en " + lexName + "."
+          : "Clic para buscar «" + escapeHtml(term) + "» en " + lexName + ".") + "</span>";
+        positionTooltip(clientX, clientY);
+        return;
+      }
+    }
+
+    // Strong's number → the lexicons in order until one has it (exact lookups: quick).
     el("rt-meta").textContent = "Buscando en léxicos…";
-    fetchLexiconEntries(term)
+    fetchLexiconEntries(term, { stale: function () { return !current(); } })
       .then(function (pack) {
+        if (!current()) return;
         if (!pack.rows || !pack.rows.length) {
           el("rt-meta").textContent = "Sin entrada";
           el("rt-body").innerHTML = formatLexLines([],
@@ -1937,11 +2124,15 @@
             "Instalá Strong ° / Chávez / Vine en e-Sword.");
           return;
         }
-        el("rt-meta").textContent = (pack.moduleTitle || "Léxico") + " · vista rápida";
-        el("rt-body").innerHTML = formatLexLines(pack.rows);
+        el("rt-meta").textContent = (viaWord ? viaWord.word + " → " + term + " · " : "") +
+          (pack.moduleTitle || "Léxico") + " · vista rápida";
+        el("rt-body").innerHTML = (viaWord ? otherCodesHtml(viaWord.codes, term) : "") +
+          formatLexLines(pack.rows);
+        fillGlossSlots(el("rt-body"));
         positionTooltip(clientX, clientY);
       })
       .catch(function (e) {
+        if (!current()) return;
         el("rt-meta").textContent = "Error";
         el("rt-body").innerHTML =
           '<span class="rt-loading">' + escapeHtml(String(e.message || e)) + "</span>";
@@ -1963,14 +2154,18 @@
     }
     // Mark selection chip-friendly
     if (/^[HG]\d+/i.test(term)) {
-      state.selectedWord = term.toUpperCase();
-      state.selectedStrongs = [{
-        strong: term.toUpperCase(),
-        spanish: "",
-        greek: "",
-        translit: "",
-        sourceModule: "link"
-      }];
+      var cur = state.selectedStrongs && state.selectedStrongs[0];
+      // The Bible word's own number: keep the word, so «Espíritu» stays its «ES» line.
+      if (!(cur && normStrongCode(cur.strong) === normStrongCode(term))) {
+        state.selectedWord = term.toUpperCase();
+        state.selectedStrongs = [{
+          strong: term.toUpperCase(),
+          spanish: "",
+          greek: "",
+          translit: "",
+          sourceModule: "link"
+        }];
+      }
     } else {
       state.selectedWord = term;
     }
@@ -1983,6 +2178,8 @@
   function openStudyPanel(target) {
     var kind = target.getAttribute("data-kind") || "bible";
     var label = target.getAttribute("data-label") || "";
+    var token = ++panelLookupSeq;
+    var current = function () { return token === panelLookupSeq; };
     el("rp-title").textContent = label;
     el("rp-body").innerHTML = '<span class="rt-loading">Cargando…</span>';
     el("ref-panel-bg").classList.add("open");
@@ -1999,6 +2196,7 @@
         : "Elige una Biblia en la pestaña Biblia";
       fetchChapterVerses(book, chapter)
         .then(function (pack) {
+          if (!current()) return;
           el("rp-meta").textContent =
             "Biblia: " + (pack.translation || pack.title || "") +
             " · vista rápida · no cambia libro/capítulo abierto";
@@ -2035,24 +2233,66 @@
     }
 
     var term = target.getAttribute("data-term") || "";
-    el("rp-meta").textContent = "Léxico · sincronizando…";
-    // Sync Léxico tab in background so modules stay linked
-    syncLexiconTab(term, false);
-    fetchLexiconEntries(term)
+    var lookup;
+    var viaWord = null;
+    if (kind === "lemma") {
+      el("rp-meta").textContent = "Léxico · buscando…";
+      lookup = loadLemmaIndex().then(function () {
+        if (!current()) return { rows: [] };
+        var found = lemmaCodes(term);
+        if (found && found.pick) {
+          // A known word: its number, exactly as a Strong's link would open it.
+          viaWord = { word: term, codes: found.codes };
+          term = found.pick;
+          syncLexiconTab(term, false);
+          return fetchLexiconEntries(term, { stale: function () { return !current(); } });
+        }
+        if (found && found.codes.length) {
+          return { rows: [], choices: found.codes }; // several numbers: listed, none opened
+        }
+        // Unknown (an inflected form): read the definitions of the lexicon in use only, once —
+        // ~0.7 s in Multiléxico — not all 86 (10 s), and not a second time in the Léxico tab
+        // behind it («Abrir en pestaña Léxico» does that on request).
+        var lex = state.lex;
+        el("rp-meta").textContent = "Léxico · buscando en " +
+          (lex ? (lex.abbreviation || lex.filename || "") : "el léxico") + "…";
+        return lex
+          ? fetchLexiconEntries(term, { mods: [lex], stale: function () { return !current(); } })
+          : { rows: [] };
+      });
+    } else {
+      el("rp-meta").textContent = "Léxico · sincronizando…";
+      // Sync Léxico tab in background so modules stay linked
+      syncLexiconTab(term, false);
+      lookup = fetchLexiconEntries(term, { stale: function () { return !current(); } });
+    }
+    lookup
       .then(function (pack) {
-        if (!pack.rows || !pack.rows.length) {
-          el("rp-meta").textContent = "Sin entrada en léxicos";
-          el("rp-body").innerHTML = formatLexLines([],
-            "No se encontró «" + escapeHtml(term) + "». Revisá que Strong ° u otro léxico esté en e-Sword.");
+        if (!current()) return;
+        if (pack.choices) {
+          el("rp-meta").textContent = "Varios números";
+          el("rp-body").innerHTML = codeChoicesHtml(term, pack.choices);
           return;
         }
-        el("rp-meta").textContent = "Léxico: " + (pack.moduleTitle || "") + " · solo lectura";
-        var html = formatLexLines(pack.rows);
+        if (!pack.rows || !pack.rows.length) {
+          el("rp-meta").textContent = "Sin entrada en léxicos";
+          el("rp-body").innerHTML = formatLexLines([], kind === "lemma" && !viaWord
+            ? "«" + escapeHtml(term) + "» no aparece en " +
+              escapeHtml(state.lex ? (state.lex.abbreviation || state.lex.filename || "") : "el léxico") +
+              ". No es una palabra de diccionario del Strong (puede ser una forma conjugada o " +
+              "declinada); se buscó solo en el léxico en uso. Con su número Strong’s (G…/H…) se busca en todos."
+            : "No se encontró «" + escapeHtml(term) + "». Revisá que Strong ° u otro léxico esté en e-Sword.");
+          return;
+        }
+        el("rp-meta").textContent = (viaWord ? viaWord.word + " → " + term + " · " : "") +
+          "Léxico: " + (pack.moduleTitle || "") + " · solo lectura";
+        var html = (viaWord ? otherCodesHtml(viaWord.codes, term) : "") + formatLexLines(pack.rows);
         html +=
           '<div style="margin-top:12px">' +
           '<button type="button" id="rp-open-lex" class="rp-action">Abrir en pestaña Léxico</button>' +
           "</div>";
         el("rp-body").innerHTML = html;
+        fillGlossSlots(el("rp-body"));
         var b = el("rp-open-lex");
         if (b) {
           b.onclick = function () {
@@ -2062,6 +2302,7 @@
         }
       })
       .catch(function (e) {
+        if (!current()) return;
         el("rp-body").innerHTML =
           '<span class="rt-loading">' + escapeHtml(String(e.message || e)) + "</span>";
       });
@@ -2069,6 +2310,7 @@
 
   function closeRefPanel() {
     el("ref-panel-bg").classList.remove("open");
+    panelLookupSeq++; // a walk still running for it stops
   }
 
   function wireRefPopups() {
@@ -2127,24 +2369,117 @@
   }
 
   /** Build clickable words, preserving WOC red segments. */
-  function appendTokenizedText(container, rawText, verseNum) {
-    // Split by WOC markers first
+  /**
+   * Section titles marked in a verse (bible_titles.rs): the verse text without the markers —
+   * exactly the old text, so word numbers don't move — and where each title sits in it.
+   */
+  function bibleTitleParts(text) {
+    var s = String(text || "");
+    if (!RE_BH_ANY.test(s)) return { plain: s, ranges: [] };
+    var plain = "";
+    var ranges = [];
+    var cur = null;
+    for (var i = 0; i < s.length; i++) {
+      var ch = s.charAt(i);
+      if (ch === BH_OPEN || ch === BH_MINOR || ch === BH_NEXT) {
+        cur = { start: plain.length, end: -1, kind: ch === BH_NEXT ? "next" : (ch === BH_MINOR ? "minor" : "lead") };
+        continue;
+      }
+      if (ch === BH_CLOSE) {
+        if (cur) {
+          cur.end = plain.length;
+          ranges.push(cur);
+          cur = null;
+        }
+        continue;
+      }
+      plain += ch;
+    }
+    return { plain: plain, ranges: ranges };
+  }
+
+  /** One title line above a verse: «El pacto de Dios con Abraham»; psalm titles lighter. */
+  function bibleHeadingLine(heads, kind) {
+    var line = document.createElement("div");
+    line.className = "bible-heading" + (kind === "minor" ? " minor" : "");
+    line.setAttribute("role", "heading");
+    line.setAttribute("aria-level", "3");
+    heads.appendChild(line);
+    return line;
+  }
+
+  /** A clickable word of a verse (also inside its titles: psalm titles are Scripture). */
+  function verseWordEl(part, verseNum, thisIdx) {
+    var w = document.createElement("span");
+    w.className = "word";
+    w.textContent = part.text;
+    if (part.script === "he") w.classList.add("script-he");
+    else if (part.script === "el") w.classList.add("script-el");
+    var markStyle = getWordMarkStyle(verseNum, thisIdx);
+    if (markStyle) w.classList.add("mark-" + markStyle);
+    if (getWordUnderline(verseNum, thisIdx)) w.classList.add("mark-ul");
+    if (
+      state.highlightMode === "word" &&
+      state.selectedVerse === verseNum &&
+      state.selectedWordIndex === thisIdx
+    ) {
+      w.classList.add("word-hl");
+    }
+    (function (vNum, wordText, idx) {
+      w.onclick = function (ev) {
+        ev.stopPropagation();
+        if (
+          state.selectedVerse === vNum &&
+          state.selectedWordIndex === idx &&
+          state.highlightMode === "word"
+        ) {
+          clearSelection();
+          return;
+        }
+        selectWord(vNum, wordText, idx);
+      };
+      w.oncontextmenu = function (ev) {
+        handleVerseContextMenu(ev, vNum, wordText, idx);
+      };
+    })(verseNum, part.text, thisIdx);
+    return w;
+  }
+
+  /**
+   * Verse text → word spans in `container`. Its own section titles go to `heads` (above the
+   * verse; skipped when null, e.g. while filtering); titles of the next verse are handed back
+   * in `out.next`. Every word keeps its number either way.
+   */
+  function appendTokenizedText(container, rawText, verseNum, heads, out) {
+    var parsed = bibleTitleParts(rawText);
+    var text = parsed.plain;
+    var ranges = parsed.ranges;
+    // Split by WOC markers first (each chunk keeps its offset, to place words against titles)
     var chunks = [];
     var re = new RegExp(WOC_OPEN + "([\\s\\S]*?)" + WOC_CLOSE, "g");
     var last = 0;
     var m;
-    while ((m = re.exec(rawText)) !== null) {
+    while ((m = re.exec(text)) !== null) {
       if (m.index > last) {
-        chunks.push({ woc: false, text: rawText.slice(last, m.index) });
+        chunks.push({ woc: false, text: text.slice(last, m.index), at: last });
       }
-      chunks.push({ woc: true, text: m[1] });
+      chunks.push({ woc: true, text: m[1], at: m.index + WOC_OPEN.length });
       last = m.index + m[0].length;
     }
-    if (last < rawText.length) {
-      chunks.push({ woc: false, text: rawText.slice(last) });
+    if (last < text.length) {
+      chunks.push({ woc: false, text: text.slice(last), at: last });
     }
-    if (!chunks.length) chunks.push({ woc: false, text: rawText });
+    if (!chunks.length) chunks.push({ woc: false, text: text, at: 0 });
 
+    var rangeAt = function (pos) {
+      for (var r = 0; r < ranges.length; r++) {
+        if (pos >= ranges[r].start && pos < ranges[r].end) return r;
+      }
+      return -1;
+    };
+    var lines = [];
+    var nextText = [];
+    var verseStarted = !ranges.length;
     var wordIdx = 0;
     for (var c = 0; c < chunks.length; c++) {
       var chunk = chunks[c];
@@ -2156,46 +2491,77 @@
       }
       var parent = wrap || container;
       var parts = tokenizeWords(chunk.text);
+      var at = chunk.at;
       for (var p = 0; p < parts.length; p++) {
         var part = parts[p];
+        var start = at;
+        at += part.text.length;
         if (part.type === "word") {
           var thisIdx = wordIdx;
           wordIdx++;
-          var w = document.createElement("span");
-          w.className = "word";
-          w.textContent = part.text;
-          if (part.script === "he") w.classList.add("script-he");
-          else if (part.script === "el") w.classList.add("script-el");
-          var markStyle = getWordMarkStyle(verseNum, thisIdx);
-          if (markStyle) w.classList.add("mark-" + markStyle);
-          if (getWordUnderline(verseNum, thisIdx)) w.classList.add("mark-ul");
-          if (
-            state.highlightMode === "word" &&
-            state.selectedVerse === verseNum &&
-            state.selectedWordIndex === thisIdx
-          ) {
-            w.classList.add("word-hl");
+          var r = ranges.length ? rangeAt(start) : -1;
+          if (r < 0) {
+            verseStarted = true;
+            parent.appendChild(verseWordEl(part, verseNum, thisIdx));
+          } else if (ranges[r].kind === "next") {
+            nextText[r] = (nextText[r] || "") + part.text;
+          } else if (heads) {
+            if (!lines[r]) lines[r] = bibleHeadingLine(heads, ranges[r].kind);
+            lines[r].appendChild(verseWordEl(part, verseNum, thisIdx));
           }
-          (function (vNum, wordText, idx) {
-            w.onclick = function (ev) {
-              ev.stopPropagation();
-              if (
-                state.selectedVerse === vNum &&
-                state.selectedWordIndex === idx &&
-                state.highlightMode === "word"
-              ) {
-                clearSelection();
-                return;
+          continue;
+        }
+        // Punctuation and spacing: cut where a title starts or ends, so «Salmo de David.» keeps
+        // its «.» and the verse its «¡».
+        var rest = part.text;
+        var pos = start;
+        while (rest) {
+          var rr = ranges.length ? rangeAt(pos) : -1;
+          var cut = rest.length;
+          for (var q = 0; q < ranges.length; q++) {
+            if (rr === q && ranges[q].end - pos < cut) cut = ranges[q].end - pos;
+            if (rr < 0 && ranges[q].start > pos && ranges[q].start - pos < cut) cut = ranges[q].start - pos;
+          }
+          var piece = rest.slice(0, cut);
+          rest = rest.slice(cut);
+          pos += cut;
+          if (rr < 0) {
+            // The line break a title leaves before the verse
+            if (!verseStarted && !/\S/.test(piece)) continue;
+            verseStarted = true;
+            parent.appendChild(document.createTextNode(piece));
+          } else if (ranges[rr].kind === "next") {
+            nextText[rr] = (nextText[rr] || "") + piece;
+          } else if (heads) {
+            // A title in two lines (DHH: the division, then the section) → two heading lines.
+            var bits = piece.split("\n");
+            for (var b = 0; b < bits.length; b++) {
+              if (b > 0) lines[rr] = null;
+              if (!bits[b]) continue;
+              if (!lines[rr]) {
+                if (!/\S/.test(bits[b])) continue;
+                lines[rr] = bibleHeadingLine(heads, ranges[rr].kind);
               }
-              selectWord(vNum, wordText, idx);
-            };
-            w.oncontextmenu = function (ev) {
-              handleVerseContextMenu(ev, vNum, wordText, idx);
-            };
-          })(verseNum, part.text, thisIdx);
-          parent.appendChild(w);
-        } else {
-          parent.appendChild(document.createTextNode(part.text));
+              lines[rr].appendChild(document.createTextNode(bits[b]));
+            }
+          }
+        }
+      }
+    }
+    if (heads) {
+      // «(1 Cr. 1.1-4)» under a title: the parallel passage, lighter.
+      var hl = heads.querySelectorAll(".bible-heading");
+      for (var h = 0; h < hl.length; h++) {
+        if (RE_PARALLEL_PASSAGE.test(hl[h].textContent.trim())) hl[h].classList.add("minor");
+      }
+    }
+    if (out) {
+      out.next = [];
+      for (var n = 0; n < nextText.length; n++) {
+        var nlines = String(nextText[n] || "").split(/\n+/);
+        for (var k = 0; k < nlines.length; k++) {
+          var one = nlines[k].replace(/\s+/g, " ").trim();
+          if (one) out.next.push(one);
         }
       }
     }
@@ -2459,20 +2825,27 @@
     renderStudySideRail(kind);
   }
 
-  /** Term used for module probes (Strong’s for léxico, lema for diccionario). */
+  /**
+   * Term used for module probes: what the panel shows. A topic opened from the Índice, else
+   * the search box (what was searched), else the Bible selection. The search box comes before
+   * the selection's Strong's code, or typing G26 after clicking «Gozaos» would mark the
+   * lexicons that have G5463.
+   */
   function probeTermForKind(kind) {
     var typed = (el("term-search") && el("term-search").value.trim()) || "";
     if (kind === "lexicon") {
+      if (probeFocus.lexicon) return probeFocus.lexicon;
+      if (typed) return /^[HG]\d+/i.test(typed) ? typed.toUpperCase() : typed;
       if (state.selectedStrongs && state.selectedStrongs.length && state.selectedStrongs[0].strong) {
         return String(state.selectedStrongs[0].strong).trim();
       }
-      if (typed && /^[HG]\d+/i.test(typed)) return typed.toUpperCase();
       if (state.selectedWord && /^[HG]\d+/i.test(state.selectedWord.trim())) {
         return state.selectedWord.trim().toUpperCase();
       }
-      return typed || state.selectedWord || "";
+      return state.selectedWord || "";
     }
     if (kind === "dictionary") {
+      if (probeFocus.dictionary) return probeFocus.dictionary;
       return typed || state.selectedWord || "";
     }
     // commentary: optional text search only; verse probe ignores term
@@ -2607,8 +2980,284 @@
     var s = String(text || "");
     var m = s.match(/[\u0590-\u05FF\uFB1D-\uFB4F]{2,}/);
     if (m) return m[0];
-    m = s.match(/[\u0370-\u03FF\u1F00-\u1FFF]{2,}/);
-    return m ? m[0] : "";
+    // LSJ marks the stem with a hyphen (\u00AB\u1F00\u03B3\u03AC\u03C0-\u03B7\u00BB): the word is \u1F00\u03B3\u03AC\u03C0\u03B7, as in the \u00CDndice.
+    m = s.match(/[\u0370-\u03FF\u1F00-\u1FFF][\u0370-\u03FF\u1F00-\u1FFF\u0300-\u036F]+(?:-[\u0370-\u03FF\u1F00-\u1FFF\u0300-\u036F]+)*/);
+    return m ? m[0].replace(/-/g, "") : "";
+  }
+
+  /* ---------- Greek/Hebrew word → Strong's number ---------- */
+  // From the headwords of the Spanish Strong's dictionaries (strong_lemmas). With it a word in
+  // a text — hovered, clicked or typed — goes straight to its number's entry instead of a scan
+  // of a whole module's definitions (0.7 s in Multiléxico, which never matched there: it spells
+  // Greek as HTML entities). Exact spelling first (after NFD: the dictionaries order Hebrew
+  // marks differently); without accents/points only when that leaves one number. Several
+  // numbers for one spelling (τίς: G5100, G5101) are all shown, never guessed between.
+  var lemmaIndex = null;        // { exact: Map, folded: Map }, once loaded
+  var lemmaIndexPromise = null;
+
+  function lemmaExactKey(w) {
+    return String(w || "").normalize("NFD").replace(/\s+/g, " ").trim();
+  }
+  function lemmaFoldKey(w) {
+    return String(w || "").normalize("NFD").toLowerCase()
+      .replace(/[\u0300-\u036F\u0591-\u05C7]/g, "").replace(/\u03C2/g, "\u03C3")
+      .replace(/\s+/g, " ").trim();
+  }
+  function hasOriginalScript(s) {
+    return /[\u0370-\u03FF\u1F00-\u1FFF\u0590-\u05FF\uFB1D-\uFB4F]/.test(String(s || ""));
+  }
+
+  /** Load the table once, in the background; built in slices so it never blocks the window. */
+  function loadLemmaIndex() {
+    if (lemmaIndexPromise) return lemmaIndexPromise;
+    var sources = strongGlossSources();
+    if (!sources.length) return Promise.resolve(null);
+    lemmaIndexPromise = invoke("strong_lemmas", { modulePaths: sources }).then(function (list) {
+      list = list || [];
+      var exact = new Map();
+      var folded = new Map();
+      var add = function (map, key, code) {
+        if (!key) return;
+        var v = map.get(key);
+        if (!v) map.set(key, [code]);
+        else if (v.indexOf(code) < 0) v.push(code);
+      };
+      return new Promise(function (resolve) {
+        var i = 0;
+        (function slice() {
+          var end = Math.min(list.length, i + 2500);
+          for (; i < end; i++) {
+            add(exact, lemmaExactKey(list[i].original), list[i].code);
+            add(folded, lemmaFoldKey(list[i].original), list[i].code);
+          }
+          if (i < list.length) { setTimeout(slice, 0); return; }
+          lemmaIndex = { exact: exact, folded: folded };
+          resolve(lemmaIndex);
+        })();
+      });
+    }).catch(function () {
+      lemmaIndexPromise = null; // try again next time
+      return null;
+    });
+    return lemmaIndexPromise;
+  }
+
+  /**
+   * The numbers for a Greek/Hebrew word: { codes, pick }. `pick` is the number to open: the
+   * first of an exact spelling (several only for true homographs, τίς: G5100/G5101 — the rest
+   * are listed beside it), or the single number of an accent-free match. An accent-free match
+   * with several numbers («ου», a bare ending, is οὐ and οὗ) picks none: they are listed and
+   * nothing opens. null while the table is not loaded; { codes: [] } for a word it does not
+   * know (an inflected form, a name not in Strong's).
+   */
+  function lemmaCodes(word) {
+    if (!lemmaIndex) return null;
+    var e = lemmaIndex.exact.get(lemmaExactKey(word));
+    if (e && e.length) return { codes: e.slice(), pick: e[0] };
+    var f = lemmaIndex.folded.get(lemmaFoldKey(word));
+    if (f && f.length) return { codes: f.slice(), pick: f.length === 1 ? f[0] : "" };
+    return { codes: [], pick: "" };
+  }
+
+  /** «Misma palabra, otros números: G5100» under a preview of a homograph (linked). */
+  function otherCodesHtml(codes, shown) {
+    var rest = (codes || []).filter(function (c) { return c !== shown; });
+    if (!rest.length) return "";
+    return '<div class="lemma-others">Misma palabra, otros números: ' +
+      formatRichText(rest.join(", ")) + "</div>";
+  }
+
+  /** The numbers an accent-free spelling could be, as links; nothing is chosen for him. */
+  function codeChoicesHtml(word, codes) {
+    return '<div class="lemma-others">«' + escapeHtml(word) + "» sin acentos puede ser: " +
+      formatRichText(codes.join(", ")) + ". Elige un número.</div>";
+  }
+
+  /** «G26», «g0026», «G 26» → «G26»; anything else → "". */
+  function normStrongCode(s) {
+    var m = /^\s*([HG])\s*0*(\d{1,5})\s*$/i.exec(String(s || ""));
+    return m ? m[1].toUpperCase() + m[2] : "";
+  }
+
+  /**
+   * The installed Spanish Strong's dictionaries — where the «ES» words of a Strong's number
+   * come from when no Bible word supplies them. Chosen by title («Diccionario Strong en
+   * Español», «…de palabras originales…», «Strong Spa»): not StrongPLUS (morphology), the
+   * Septuagint one, the Multiléxico (one entry mixes several dictionaries) nor the English
+   * Strong's. The lexicon in use goes first when it is one of them; it is never changed.
+   */
+  function strongGlossSources() {
+    var list = (state.lexicons || []).filter(function (l) {
+      var t = l.title || "";
+      return /\bstrong\b/i.test(t) &&
+        /espa[nñ]ol|espaniol|\bspa\b|palabras originales/i.test(t) &&
+        !/plus|septuaginta/i.test(t);
+    });
+    function rank(l) {
+      var a = (l.abbreviation || "") + " " + (l.title || "");
+      if (state.lex && l.path === state.lex.path) return 0;
+      if (/°/.test(a)) return 1;                                  // Strong ° — the e-Sword set
+      if (/STRONGes|Strong-ES|palabras originales/i.test(a)) return 2;
+      if (/\(esp\)/i.test(a)) return 3;
+      return 4;                                                   // Strong SPA: no Greek/Hebrew
+    }
+    list.sort(function (a, b) {
+      return rank(a) - rank(b) || String(a.path).localeCompare(String(b.path));
+    });
+    return list.slice(0, 4).map(function (l) { return l.path; });
+  }
+
+  var glossCache = {}; // first source + "|" + code → gloss, or null when none has a list
+
+  /** Strong's Spanish renderings of `code` («G26» → «ágape, amado, amor»), or null. */
+  function fetchStrongGloss(code) {
+    code = normStrongCode(code);
+    var sources = strongGlossSources();
+    if (!code || !sources.length) return Promise.resolve(null);
+    var key = sources[0] + "|" + code;
+    if (Object.prototype.hasOwnProperty.call(glossCache, key)) {
+      return Promise.resolve(glossCache[key]);
+    }
+    return invoke("strong_gloss", { code: code, modulePaths: sources }).then(function (g) {
+      glossCache[key] = g || null;
+      return g || null;
+    }).catch(function () { return null; });
+  }
+
+  /** An «ES» line to fill in once the words arrive (see fillGlossSlots). */
+  function glossLineHtml(code) {
+    return '<div class="gloss-line" data-gloss-code="' + escapeHtml(code) + '">' +
+      '<span class="lbl">ES</span><span class="es-val es-pending">Buscando la traducción…</span></div>';
+  }
+
+  function paintGlossLine(line, g) {
+    var val = line.querySelector(".es-val");
+    if (!val) return;
+    val.classList.remove("es-pending");
+    var old = line.querySelector(".es-src");
+    if (old) old.parentNode.removeChild(old);
+    if (!g || !g.spanish) {
+      val.classList.add("es-none");
+      val.textContent = strongGlossSources().length
+        ? "(el Diccionario Strong no da traducción para este número)"
+        : "(instala un Diccionario Strong en español para ver la traducción)";
+      return;
+    }
+    val.classList.remove("es-none");
+    val.textContent = g.spanish;
+    // In the Léxico card the pronunciation sits beside the word, and an entry without the
+    // Greek/Hebrew word takes the dictionary's; in a quick view it leads the note.
+    var card = line.closest && line.closest(".lex-card");
+    var pron = card && card.querySelector(".lc-pron");
+    var orig = card && card.querySelector(".lc-orig");
+    if (pron && !pron.textContent && g.translit) pron.textContent = "— " + g.translit;
+    if (orig && !orig.textContent && g.original) {
+      orig.textContent = g.original;
+      var sc = originalScriptClass(g.original);
+      if (sc) orig.classList.add(sc);
+    }
+    var src = document.createElement("span");
+    src.className = "es-src";
+    src.textContent = (!card && g.translit ? g.translit + " — " : "") +
+      "traducciones de la Reina-Valera 1960 · " + (g.source || "Strong");
+    line.appendChild(src);
+  }
+
+  /**
+   * Fill a Léxico card from the Strong dictionary: the pronunciation beside the word always,
+   * the word itself when the entry lacked it, and the Spanish list only when the card has no
+   * Spanish yet (a word clicked in the Bible keeps the verse's word).
+   */
+  function fillLexCard(card) {
+    var code = card && card.getAttribute("data-card-code");
+    if (!code) return;
+    fetchStrongGloss(code).then(function (g) {
+      if (!card.isConnected) return;
+      var pron = card.querySelector(".lc-pron");
+      var orig = card.querySelector(".lc-orig");
+      if (g && g.translit && pron && !pron.textContent) pron.textContent = "— " + g.translit;
+      if (g && g.original && orig && !orig.textContent) {
+        orig.textContent = g.original;
+        var sc = originalScriptClass(g.original);
+        if (sc) orig.classList.add(sc);
+      }
+      var line = card.querySelector(".lemma-spanish");
+      var val = line && line.querySelector(".es-val");
+      if (val && val.classList.contains("es-pending")) paintGlossLine(line, g);
+    });
+  }
+
+  /** Fill every «ES» line waiting in `container` (header card, quick view, Índice entry). */
+  function fillGlossSlots(container) {
+    if (!container) return;
+    var lines = container.querySelectorAll("[data-gloss-code]");
+    Array.prototype.forEach.call(lines, function (line) {
+      fetchStrongGloss(line.getAttribute("data-gloss-code")).then(function (g) {
+        if (line.isConnected) paintGlossLine(line, g);
+      });
+    });
+  }
+
+  /**
+   * The original word in `text`, in the script of the number's testament (G → Greek,
+   * H → Hebrew): a Greek entry often quotes a Hebrew word («אָהֵב» in G25) and the other way
+   * round, and extractOriginalScript would take any Hebrew first.
+   */
+  function originalForCode(text, code) {
+    var s = String(text || "");
+    var m;
+    if (/^G/i.test(code || "")) {
+      m = s.match(/[\u0370-\u03FF\u1F00-\u1FFF][\u0370-\u03FF\u1F00-\u1FFF\u0300-\u036F]+(?:-[\u0370-\u03FF\u1F00-\u1FFF\u0300-\u036F]+)*/);
+      return m ? m[0].replace(/-/g, "") : "";
+    }
+    if (/^H/i.test(code || "")) {
+      m = s.match(/[\u0590-\u05FF\uFB1D-\uFB4F]{2,}/);
+      return m ? m[0] : "";
+    }
+    return extractOriginalScript(s);
+  }
+
+  function foldWord(s) {
+    return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036F]/g, "").trim();
+  }
+
+  /**
+   * The Léxico's header card describes the entry shown. The Bible selection fills it only
+   * while the panel shows that selection's own number («Espíritu» → G4151); a number typed,
+   * clicked or opened from the Índice gets its words from a Spanish Strong's dictionary
+   * (`needsGloss`), never the selection's.
+   */
+  function buildLexiconContext(rows) {
+    var termInput = (el("term-search") && el("term-search").value.trim()) || "";
+    var r0 = rows && rows[0];
+    var shown = normStrongCode(r0 && r0.term) || normStrongCode(termInput);
+    var sel = state.selectedStrongs && state.selectedStrongs.length ? state.selectedStrongs[0] : null;
+    var word = state.selectedWord && !/^[HG]\d+/i.test(state.selectedWord) ? state.selectedWord : "";
+    var ctx = { spanish: "", original: "", strong: shown, translit: "", source: "", needsGloss: false };
+    if (sel && shown && normStrongCode(sel.strong) === shown) {
+      // The card's top line is the dictionary form and the Strong dictionary's pronunciation
+      // (the interlinear's own transliteration is unreliable: «principio» → H7225 came with
+      // «el»); the verse's form (σάρκα for σάρξ) goes beside the verse's Spanish word.
+      ctx.spanish = sel.spanish && !/^[HG]\d+/i.test(sel.spanish) ? sel.spanish : word;
+      if (ctx.spanish) {
+        ctx.esNote = "palabra del versículo seleccionado" + (sel.greek ? " · en el texto: " + sel.greek : "");
+      }
+      if (sel.sourceModule && sel.sourceModule !== "link" && sel.sourceModule !== "direct") {
+        ctx.source = sel.sourceModule;
+      }
+    } else if (!shown && word && foldWord(termInput) === foldWord(word)) {
+      ctx.spanish = word; // the word itself was searched: no Strong's number for it
+    }
+    if (r0 && !ctx.original) {
+      ctx.original = originalForCode(r0.term, shown) || originalForCode(r0.definition, shown);
+    }
+    // A lexicon keyed by words, not numbers: its headword is the Spanish-facing lemma.
+    if (!ctx.spanish && r0 && r0.term && !shown && !/^[HG]\d+/i.test(r0.term) &&
+        !extractOriginalScript(r0.term)) {
+      ctx.spanish = r0.term;
+    }
+    ctx.needsGloss = !!shown && !ctx.spanish;
+    return ctx;
   }
 
   /**
@@ -2673,7 +3322,9 @@
     var origLine = ctx.original || (ctx.strong ? ctx.strong : "—");
     var esLine = ctx.spanish
       ? ctx.spanish
-      : (ctx.strong ? "(sin glosa en español — selecciona la palabra en la Biblia)" : "—");
+      : ctx.needsGloss
+        ? "Buscando la traducción…"
+        : (ctx.strong ? "(sin glosa en español — selecciona la palabra en la Biblia)" : "—");
     wrap.innerHTML =
       '<div class="lemma-original"></div>' +
       '<div class="lemma-spanish"><span class="lbl">ES</span><span class="es-val"></span></div>' +
@@ -2683,6 +3334,11 @@
     var sc = originalScriptClass(origLine);
     if (sc) origEl.classList.add(sc);
     wrap.querySelector(".es-val").textContent = esLine;
+    if (ctx.needsGloss) {
+      // Filled by fillGlossSlots from a Spanish Strong's dictionary.
+      wrap.querySelector(".lemma-spanish").setAttribute("data-gloss-code", ctx.strong);
+      wrap.querySelector(".es-val").classList.add("es-pending");
+    }
     var metaBits = [];
     if (ctx.strong) metaBits.push("<code>" + escapeHtml(ctx.strong) + "</code>");
     if (ctx.translit) metaBits.push(escapeHtml(ctx.translit));
@@ -2692,13 +3348,90 @@
     return wrap;
   }
 
+  /**
+   * The Léxico's card — the same for a search, a word clicked in the Bible and a topic opened
+   * from the Índice, Greek or Hebrew: the number, the original word and, after a dash, how it
+   * is pronounced («G102 ἀδύνατος — adúnatos»); then the Spanish, set apart («ES …») with where
+   * it comes from; then the lexicon. The original word is isolated (dir=auto) so Hebrew, read
+   * right to left, never reorders the number or the dash around it.
+   */
+  function renderLexCardEl(ctx, moduleLabel) {
+    var wrap = document.createElement("div");
+    wrap.className = "lemma-header lex-card";
+    // The Strong dictionary fills the pronunciation (and the word, the Spanish if missing).
+    if (ctx.strong) wrap.setAttribute("data-card-code", ctx.strong);
+    var top = document.createElement("div");
+    top.className = "lemma-original lc-top";
+    if (ctx.strong) {
+      var code = document.createElement("span");
+      code.className = "lc-code";
+      code.textContent = ctx.strong;
+      top.appendChild(code);
+    }
+    var orig = document.createElement("span");
+    orig.className = "lc-orig";
+    orig.setAttribute("dir", "auto");
+    var word = hasOriginalScript(ctx.original) ? ctx.original : "";
+    orig.textContent = word;
+    var sc = originalScriptClass(word);
+    if (sc) orig.classList.add(sc);
+    top.appendChild(orig);
+    var pron = document.createElement("span");
+    pron.className = "lc-pron";
+    pron.textContent = ctx.translit ? "— " + ctx.translit : "";
+    top.appendChild(pron);
+    wrap.appendChild(top);
+
+    var es = document.createElement("div");
+    es.className = "lemma-spanish";
+    es.innerHTML = '<span class="lbl">ES</span><span class="es-val"></span>';
+    var val = es.querySelector(".es-val");
+    if (ctx.spanish) {
+      val.textContent = ctx.spanish;
+      if (ctx.esNote) {
+        var note = document.createElement("span");
+        note.className = "es-src";
+        note.textContent = ctx.esNote;
+        es.appendChild(note);
+      }
+    } else if (ctx.strong) {
+      val.textContent = "Buscando la traducción…"; // filled by fillLexCard
+      val.classList.add("es-pending");
+    } else {
+      val.textContent = "—";
+    }
+    wrap.appendChild(es);
+
+    var meta = document.createElement("div");
+    meta.className = "lemma-meta";
+    meta.textContent = [moduleLabel, ctx.source].filter(Boolean).join(" · ");
+    wrap.appendChild(meta);
+    return wrap;
+  }
+
   function moduleLabelPlain(m) {
     return (m.abbreviation || m.filename || "") + " — " + (m.title || "");
   }
 
-  function applyContentFlagsToDropdown(kind) {
+  function applyContentFlagsToDropdown(kind, leavingMenu) {
     var sel = el("sel-mod");
-    if (!sel || state.tab === "biblia" || state.tab === "temas") return;
+    // The menu shows the current tab's modules only; another tab's ● never refills it.
+    if (!sel || tabKind() !== kind) return;
+    // The reader is in the menu (open, or focused to choose with the keys): re-sorting it now
+    // would move the modules under the pointer, about a second after a search. Mark them where
+    // they are, and sort once the menu loses focus (during blur it may still count as focused).
+    if (!leavingMenu && document.activeElement === sel) {
+      for (var i = 0; i < sel.options.length; i++) {
+        var o = sel.options[i];
+        var has = !!state.contentFlags[o.value];
+        o.textContent = (has ? "● " : "") + o.textContent.replace(/^[●○]\s+/, "");
+        if (has) o.setAttribute("data-has-content", "1");
+        else o.removeAttribute("data-has-content");
+      }
+      state._menuSortPending = kind;
+      return;
+    }
+    state._menuSortPending = null;
     var cur = sel.value;
     var list =
       kind === "commentary" ? state.commentaries :
@@ -2723,6 +3456,15 @@
   }
 
   function refreshContentFlags(kind, items, after) {
+    // Every earlier probe, of any tab, is out of date from here on, even when this call ends
+    // up probing nothing: a slow probe of 351 dictionaries that lands after switching to the
+    // Léxico tab must not refill the Léxico menu with dictionaries.
+    var probeId = (state._probeSeq = (state._probeSeq || 0) + 1);
+    if (state._probeTimer) {
+      clearTimeout(state._probeTimer);
+      state._probeTimer = null;
+    }
+    state._probeInFlight = false;
     if (after) after(); // paint UI immediately
     renderStudySideRail(kind);
     if (!items || !items.length) {
@@ -2748,12 +3490,12 @@
       return;
     }
 
-    // Cap probes — hundreds of commentary modules after import can freeze the UI/native host
-    var MAX_PROBE = 48;
-    var paths = items.map(function (m) { return m.path; }).slice(0, MAX_PROBE);
-    var probeId = (state._probeSeq = (state._probeSeq || 0) + 1);
-    // Debounce probes
-    if (state._probeTimer) clearTimeout(state._probeTimer);
+    // Commentaries are probed per verse and can number in the hundreds after an import, so
+    // they stay capped (the native side caps them too). Every dictionary and lexicon is
+    // probed: a cap left the ● off every module past it.
+    var paths = items.map(function (m) { return m.path; });
+    if (kind === "commentary") paths = paths.slice(0, 48);
+    // Debounced: a burst of calls sends one probe (each call cleared the last one's timer).
     state._probeInFlight = true;
     renderStudySideRail(kind);
 
@@ -3129,7 +3871,8 @@
     }
     if (!raw) return -1;
     // WOC markers become spaces so tokenization matches appendTokenizedText()
-    var parts = tokenizeWords(raw.replace(/[\uE000\uE001]/g, " "));
+    // Title markers go (their words stay: numbering as in appendTokenizedText)
+    var parts = tokenizeWords(raw.replace(RE_BH_MARKS, "").replace(/[\uE000\uE001]/g, " "));
     var target = normKey(state.selectedWord);
     var tokenIdx = 0;
     var occurrence = 0;
@@ -3176,8 +3919,18 @@
     return out;
   }
 
+  /**
+   * Choose a starting lexicon only when none is chosen yet (first run, or the saved one was
+   * uninstalled). Never replaces the reader's own pick: a word looked up from the Bible opens
+   * in whichever lexicon they were using.
+   */
   function preferStrongLexicon() {
     if (!state.lexicons || !state.lexicons.length) return;
+    if (state.lex) {
+      for (var i = 0; i < state.lexicons.length; i++) {
+        if (state.lexicons[i].path === state.lex.path) return;
+      }
+    }
     var prefer = state.lexicons.filter(function (l) {
       var h = (l.title || "") + " " + (l.filename || "") + " " + (l.abbreviation || "");
       return /strong/i.test(h) && !/swanson|barclay|tuggy|ch[aá]vez/i.test(h);
@@ -3199,6 +3952,9 @@
    * @param {boolean} openLex after resolve, jump to lexicon search
    */
   function resolveSelectedStrongs(openLex) {
+    // Any newer call — another word clicked, even one that resolves without asking — makes
+    // an answer still on its way stale (see `superseded` below).
+    var isLatest = latest("resolve");
     if (!state.selectedWord || state.selectedVerse == null) {
       if (openLex) goToStudyTab("lexico");
       return Promise.resolve(null);
@@ -3230,6 +3986,15 @@
     state.strongsNote = "Resolviendo griego/hebreo…";
     updateSelectionUI();
 
+    var asked = { word: state.selectedWord, verse: state.selectedVerse, book: state.bookNumber, chapter: state.chapter };
+    // The answer for a word that is no longer the selection writes nothing, and the steps
+    // chained on this promise (search the Léxico, refresh the ●) must not run for it either:
+    // the promise then never settles. A word not in the interlinears walks all of them
+    // (~0.1 s), so a quick second click is answered first.
+    function superseded() {
+      return !isLatest() || state.selectedWord !== asked.word || state.selectedVerse !== asked.verse ||
+        state.bookNumber !== asked.book || state.chapter !== asked.chapter;
+    }
     return invoke("resolve_strongs", {
       bookNumber: state.bookNumber,
       chapter: state.chapter,
@@ -3241,6 +4006,7 @@
       })(),
       interlinearPaths: paths
     }).then(function (res) {
+      if (superseded()) return new Promise(function () {});
       state.selectedStrongs = (res && res.hits) || [];
       state.strongsNote = (res && res.note) || "";
       if (state.selectedStrongs.length) {
@@ -3255,6 +4021,7 @@
       if (openLex) openLexiconWithStrongs();
       return state.selectedStrongs;
     }).catch(function (e) {
+      if (superseded()) return new Promise(function () {});
       state.selectedStrongs = [];
       state.strongsNote = String(e.message || e);
       updateSelectionUI();
@@ -3296,7 +4063,7 @@
   }
 
   function plainVerseText(text) {
-    return String(text || "")
+    return withoutBibleTitles(text)
       .replace(/\uE000|\uE001/g, "")
       .replace(/<[^>]+>/g, "")
       .replace(/\s+/g, " ")
@@ -3311,6 +4078,10 @@
     var parallelPaths = activeParallelPaths();
     var parallelOn = state.bibleView === "parallel" && parallelPaths.length > 0;
     var primaryAbbr = state.bible ? bibleLabel(state.bible) : "Principal";
+    // Section titles above their verse (not while filtering); a title the module put at the
+    // end of the previous verse waits in pendingNext.
+    var showTitles = !q;
+    var pendingNext = [];
 
     for (var i = 0; i < state.verses.length; i++) {
       var v = state.verses[i];
@@ -3328,6 +4099,18 @@
       }
       if (!match) continue;
       count++;
+
+      var heads = null;
+      if (showTitles) {
+        heads = document.createElement("div");
+        heads.className = "bible-headings";
+        for (var pn = 0; pn < pendingNext.length; pn++) {
+          bibleHeadingLine(heads, RE_PARALLEL_PASSAGE.test(pendingNext[pn]) ? "minor" : "lead").textContent =
+            pendingNext[pn];
+        }
+      }
+      pendingNext = [];
+      var tokOut = {};
 
       var row = document.createElement("div");
       row.className = "verse";
@@ -3373,7 +4156,7 @@
         tag0.className = "pcol-tag";
         tag0.textContent = primaryAbbr;
         col0.appendChild(tag0);
-        appendTokenizedText(col0, v.text, v.verse);
+        appendTokenizedText(col0, v.text, v.verse, heads, tokOut);
         row.appendChild(col0);
 
         for (var p = 0; p < parallelPaths.length; p++) {
@@ -3408,7 +4191,7 @@
       } else {
         var vt = document.createElement("span");
         vt.className = "vt";
-        appendTokenizedText(vt, v.text, v.verse);
+        appendTokenizedText(vt, v.text, v.verse, heads, tokOut);
         row.appendChild(vt);
       }
 
@@ -3419,7 +4202,20 @@
           handleVerseContextMenu(ev, verseNum, null, -1);
         };
       })(v.verse);
+      pendingNext = tokOut.next || [];
+      if (heads && heads.firstChild) list.appendChild(heads);
       list.appendChild(row);
+    }
+    // A title the last verse carries for the next chapter (2 chapters of the DHH): shown at
+    // the end rather than hidden.
+    if (showTitles && pendingNext.length) {
+      var tailHeads = document.createElement("div");
+      tailHeads.className = "bible-headings";
+      for (var tn = 0; tn < pendingNext.length; tn++) {
+        bibleHeadingLine(tailHeads, RE_PARALLEL_PASSAGE.test(pendingNext[tn]) ? "minor" : "lead").textContent =
+          pendingNext[tn];
+      }
+      list.appendChild(tailHeads);
     }
 
     if (!count) {
@@ -3570,9 +4366,10 @@
     state.refIndex = index;
     renderReferenceToc();
     if (content) content.innerHTML = '<div class="status">Cargando sección…</div>';
+    var isLatestSection = latest("ref-section");
     invoke("get_reference_chapter", { modulePath: state.ref.path, index: index })
       .then(function (res) {
-        if (!content) return;
+        if (!content || !isLatestSection()) return;
         if (!res) {
           content.innerHTML = '<div class="status">Esta sección está vacía.</div>';
           return;
@@ -3593,7 +4390,7 @@
           moduleLabelPlain(state.ref) + " — " + res.chapter;
       })
       .catch(function (e) {
-        if (content) {
+        if (content && isLatestSection()) {
           content.innerHTML = '<div class="error">' + escapeHtml(String(e.message || e)) + "</div>";
         }
       });
@@ -3613,8 +4410,10 @@
     }
     el("ref-status").textContent = "Cargando " + moduleLabelPlain(state.ref) + "…";
     if (content) content.innerHTML = '<div class="status">Cargando contenido…</div>';
+    var isLatestToc = latest("ref-toc");
     invoke("list_reference_chapters", { modulePath: state.ref.path })
       .then(function (rows) {
+        if (!isLatestToc()) return;
         state.refToc = rows || [];
         if (!state.refToc.length) {
           state.refIndex = null;
@@ -3630,6 +4429,7 @@
         openReferenceSection(want);
       })
       .catch(function (e) {
+        if (!isLatestToc()) return;
         state.refToc = [];
         renderReferenceToc();
         el("ref-status").textContent = "Error al abrir el módulo.";
@@ -3735,9 +4535,10 @@
     var label = d + " de " + MONTHS_ES[m - 1];
     el("dev-status").textContent = moduleLabelPlain(state.dev) + " — " + label;
     if (content) content.innerHTML = '<div class="status">Cargando lectura…</div>';
+    var isLatestDev = latest("dev");
     invoke("get_devotional", { modulePath: state.dev.path, month: m, day: d })
       .then(function (res) {
-        if (!content) return;
+        if (!content || !isLatestDev()) return;
         if (!res) {
           content.innerHTML =
             '<div class="status">Este devocionario no tiene lectura para el ' +
@@ -3758,13 +4559,77 @@
         content.appendChild(div);
       })
       .catch(function (e) {
-        if (content) {
+        if (content && isLatestDev()) {
           content.innerHTML = '<div class="error">' + escapeHtml(String(e.message || e)) + "</div>";
         }
       });
   }
 
+  /* ---------- Study tabs keep their place ---------- */
+  // Leaving the Léxico, Diccionario or Comentario remembers what it showed — the search box,
+  // a topic opened from the Índice, how far the article and the Índice were scrolled — and
+  // coming back keeps all of it, unless a new word or verse was picked in the Bible or the
+  // module changed meanwhile (then the tab shows the new selection, as before). A hidden tab
+  // is display:none, which loses scroll positions, so those are saved and put back.
+  var panelMemo = {};
+  var PANEL_SCROLLERS = {
+    lexico: ["#lex-list", "#lex-index .ti-scroll", "#lex-side-list"],
+    diccionario: ["#dict-list", "#dict-index .ti-scroll", "#dict-side-list"],
+    comentario: ["#cmt-list", "#cmt-side-list"]
+  };
+
+  /**
+   * What a tab's content follows in the Bible: the Comentario, the verse; the Léxico and the
+   * Diccionario, the selected word (with no word selected, moving through the Bible changes
+   * nothing for them).
+   */
+  function selectionKey(tab) {
+    var place = [state.bookNumber, state.chapter, state.selectedVerse].join(":");
+    if (tab === "comentario") return place;
+    if (!state.selectedWord) return "";
+    var s = state.selectedStrongs && state.selectedStrongs[0];
+    return [place, state.selectedWordIndex, state.selectedWord, s ? s.strong : ""].join("|");
+  }
+
+  function studyModulePath(tab) {
+    var m = tab === "lexico" ? state.lex : tab === "diccionario" ? state.dict :
+      tab === "comentario" ? state.cmt : null;
+    return m ? m.path : "";
+  }
+
+  function rememberPanel(tab, term) {
+    if (!PANEL_SCROLLERS[tab]) return;
+    var scroll = {};
+    PANEL_SCROLLERS[tab].forEach(function (s) {
+      var n = document.querySelector(s);
+      if (n) scroll[s] = n.scrollTop;
+    });
+    panelMemo[tab] = { term: term, selKey: selectionKey(tab), path: studyModulePath(tab), scroll: scroll };
+  }
+
+  /**
+   * Keep the tab as it was: same module, and nothing new picked in the Bible. For the Léxico
+   * and the Diccionario a selection that was only cleared (no word now) keeps it too.
+   */
+  function panelStillCurrent(tab) {
+    var m = panelMemo[tab];
+    if (!m || m.path !== studyModulePath(tab)) return false;
+    var key = selectionKey(tab);
+    return key === m.selKey || (tab !== "comentario" && key === "");
+  }
+
+  function restorePanelScroll(tab) {
+    var m = panelMemo[tab];
+    if (!m || !m.scroll) return;
+    Object.keys(m.scroll).forEach(function (s) {
+      var n = document.querySelector(s);
+      if (n) n.scrollTop = m.scroll[s];
+    });
+  }
+
   function setTab(tab) {
+    var leaving = state.tab;
+    if (leaving !== tab) rememberPanel(leaving, el("term-search") ? el("term-search").value : "");
     state.tab = tab;
     var buttons = document.querySelectorAll("#tabs button");
     for (var i = 0; i < buttons.length; i++) {
@@ -3822,13 +4687,17 @@
 
     if (tab === "comentario") {
       termInput.placeholder = "Opcional: buscar texto en el módulo…";
-      termInput.value = "";
+      // Same verse, same commentary: the panel is kept as it was (a text search included).
+      var keepCmt = panelStillCurrent("comentario");
+      termInput.value = keepCmt ? panelMemo.comentario.term : "";
       // Fill dropdown instantly, probe ● in background
       fillSelect(sel, state.commentaries, function (m) { return m.path; },
         moduleLabelPlain, state.cmt && state.cmt.path, null, true);
       refreshContentFlags("commentary", state.commentaries, null);
       syncCmtLevelCheckboxes();
-      if (state.selectedVerse != null) {
+      if (keepCmt) {
+        restorePanelScroll("comentario");
+      } else if (state.selectedVerse != null) {
         loadCommentariesForVerse();
       } else {
         el("cmt-list").innerHTML =
@@ -3841,6 +4710,18 @@
       }
     } else if (tab === "diccionario") {
       termInput.placeholder = "Palabra (Dios, crear, luz…)";
+      if (panelStillCurrent("diccionario")) {
+        // Nothing new picked in the Bible: the panel stays as it was left (the search, a topic
+        // opened from the Índice, the scroll). Only the shared menu and the ● are refreshed.
+        termInput.value = panelMemo.diccionario.term;
+        fillSelect(sel, state.dictionaries, function (m) { return m.path; },
+          moduleLabelPlain, state.dict && state.dict.path, null, true);
+        refreshContentFlags("dictionary", state.dictionaries, null);
+        restorePanelScroll("diccionario");
+        return;
+      }
+      // The panel is repainted from the Bible selection: an Índice topic opened earlier is gone.
+      probeFocus.dictionary = "";
       termInput.value = state.selectedWord || "";
       fillSelect(sel, state.dictionaries, function (m) { return m.path; },
         moduleLabelPlain, state.dict && state.dict.path, null, true);
@@ -3848,19 +4729,32 @@
       if (state.selectedWord || termInput.value.trim()) {
         runDictionarySearch(termInput.value.trim() || state.selectedWord, true);
       } else {
+        panelSeq.dictionary++;
         el("dict-list").innerHTML =
           '<div class="status"><b>Cómo usar el diccionario:</b><br/>' +
           "1. Clic en una palabra en Biblia, o escribe el <b>lema</b> (ej. <b>Dios</b>, <b>AMOR</b>).<br/>" +
-          "2. El menú y la columna derecha marcan <b>●</b> los diccionarios con entrada.<br/>" +
-          "3. Solo se muestran <b>entradas cuyo título coincide</b> — no menciones sueltas en el texto.</div>";
+          "2. O recorre el <b>Índice</b> de la izquierda: clic (o ↑/↓) abre ese tema.<br/>" +
+          "3. El menú y la columna derecha marcan <b>●</b> los diccionarios con entrada.<br/>" +
+          "4. Solo se muestran <b>entradas cuyo título coincide</b> — no menciones sueltas en el texto.</div>";
         el("dict-status").textContent = "Listo para buscar.";
         renderStudySideRail("dictionary");
+        renderTopicIndex("dictionary", "");
       }
     } else if (tab === "lexico") {
       termInput.placeholder = "Strong’s: H1254 o G26 — o clic una palabra en Biblia";
+      // Only picks one when none is chosen; otherwise the reader's lexicon stays.
       preferStrongLexicon();
       fillSelect(sel, state.lexicons, function (m) { return m.path; },
         moduleLabelPlain, state.lex && state.lex.path, null, true);
+      if (panelStillCurrent("lexico")) {
+        // Nothing new picked in the Bible: the panel stays as it was left (the search, a topic
+        // opened from the Índice, the scroll). Only the ● are refreshed.
+        termInput.value = panelMemo.lexico.term;
+        refreshContentFlags("lexicon", state.lexicons, null);
+        restorePanelScroll("lexico");
+        return;
+      }
+      probeFocus.lexicon = "";
 
       // Prefer resolved Strong’s from interlinear (Gozaos → G5463)
       var lexTerm = "";
@@ -3887,10 +4781,13 @@
       } else if (state.selectedWord) {
         // Still resolving or failed — try resolve now, then search + probe ●
         termInput.value = state.selectedWord;
+        panelSeq.lexicon++;
         el("lex-list").innerHTML =
           '<div class="status">Buscando el número Strong’s de «' +
           escapeHtml(state.selectedWord) + "» en el interlineal…</div>";
         renderStudySideRail("lexicon");
+        // Keep the column filled while the Strong's code resolves; the search re-centers it.
+        if (!tiState.lexicon) renderTopicIndex("lexicon", "");
         resolveSelectedStrongs(false).then(function () {
           if (state.selectedStrongs && state.selectedStrongs.length) {
             var code = state.selectedStrongs[0].strong;
@@ -3914,18 +4811,22 @@
               "<br/>Necesitas una Biblia interlineal (p. ej. <b>iRV 1960+</b>) en e-Sword." +
               "</div>";
             el("lex-status").textContent = "Sin Strong’s para «" + state.selectedWord + "»";
+            renderTopicIndex("lexicon", "");
           }
         });
       } else {
         termInput.value = "";
+        panelSeq.lexicon++;
         refreshContentFlags("lexicon", state.lexicons, null);
         el("lex-list").innerHTML =
           '<div class="status"><b>Léxico Strong’s:</b><br/>' +
           "1. En <b>Biblia</b>, clic en una palabra (ej. <b>Gozaos</b> en Mt 5:12).<br/>" +
           "2. Pulsa <b>→ Léxico</b> o esta pestaña — se resuelve al griego/hebreo (G5463…).<br/>" +
           "3. O escribe un código: <b>H1254</b>, <b>G26</b>.<br/>" +
-          "4. <b>●</b> en el menú / columna = léxico con definición para ese código.</div>";
+          "4. O recorre el <b>Índice</b> de la izquierda (<b>Griego · G</b> / <b>Hebreo · H</b>).<br/>" +
+          "5. <b>●</b> en el menú / columna = léxico con definición para ese código.</div>";
         el("lex-status").textContent = "Selecciona una palabra en Biblia o escribe un Strong’s.";
+        renderTopicIndex("lexicon", "");
       }
     }
   }
@@ -4062,6 +4963,7 @@
       " (" + levels + ")…</div>";
     renderStudySideRail("commentary");
     var lv = cmtLevelArgs();
+    var isLatest = latest("cmt");
     invoke("get_verse_commentaries", {
       modulePath: state.cmt.path,
       bookNumber: state.bookNumber,
@@ -4071,6 +4973,7 @@
       includeChapter: lv.includeChapter,
       includeBook: lv.includeBook
     }).then(function (rows) {
+      if (!isLatest()) return;
       var ms = Date.now() - t0;
       el("cmt-ref").textContent =
         ref + " · " + modName + " · " + (rows ? rows.length : 0) +
@@ -4091,6 +4994,7 @@
       });
       renderStudySideRail("commentary");
     }).catch(function (e) {
+      if (!isLatest()) return;
       box.innerHTML = '<div class="error">No se pudo leer el módulo:<br/>' +
         String(e.message || e) + "</div>";
       renderStudySideRail("commentary");
@@ -4172,17 +5076,21 @@
       "Buscando «" + term + "» en " + (state.cmt.abbreviation || state.cmt.filename) +
       " (solo módulos de texto plano)…";
     el("cmt-list").innerHTML = '<div class="status">Buscando en el texto del módulo…</div>';
+    // Same panel as the verse commentary: whichever was asked for last paints it. A search
+    // in a 280 MB commentary (Pulpit) takes up to a second and must not cover a later one.
+    var isLatest = latest("cmt");
     invoke("search_commentary_term", {
       modulePath: state.cmt.path,
       term: term,
       limit: 30
     }).then(function (rows) {
+      if (!isLatest()) return;
       state.cmtHits = rows || [];
       if (fillSuggest && state.cmtHits.length) {
         openSuggest(state.cmtHits.map(function (r) {
           return {
             title: r.reference || "(sin ref.)",
-            sub: (r.level || "") + " · " + ((r.text || "").slice(0, 80).replace(/\s+/g, " ")) + "…",
+            sub: (r.level || "") + " · " + (plainMarks(r.text).slice(0, 80).replace(/\s+/g, " ")) + "…",
             data: r
           };
         }), function (item) {
@@ -4200,6 +5108,7 @@
       }
       renderCommentaryList(state.cmtHits, null, {});
     }).catch(function (e) {
+      if (!isLatest()) return;
       el("cmt-list").innerHTML = '<div class="error">' + String(e.message || e) +
         '</div><div class="status" style="margin-top:8px">Intentando comentario del versículo…</div>';
       loadCommentariesForVerse();
@@ -4270,16 +5179,23 @@
   }
 
   function runDictionarySearch(term, fillSuggest) {
+    var token = ++panelSeq.dictionary;
+    probeFocus.dictionary = "";
+    if (state.tab !== "diccionario") rememberPanel("diccionario", term);
     if (!state.dict) {
       el("dict-list").innerHTML = '<div class="status">Elige un diccionario en el menú de arriba.</div>';
       renderStudySideRail("dictionary");
+      renderTopicIndex("dictionary", "");
       return;
     }
     if (!term) {
-      el("dict-list").innerHTML = '<div class="status">Escribe una palabra (ej. Dios, crear, luz) o selecciónala en la Biblia.</div>';
+      el("dict-list").innerHTML = '<div class="status">Escribe una palabra (ej. Dios, crear, luz), selecciónala en la Biblia o elige un tema del <b>Índice</b>.</div>';
       renderStudySideRail("dictionary");
+      renderTopicIndex("dictionary", "");
       return;
     }
+    tiBackTerm.dictionary = term;
+    renderTopicIndex("dictionary", term);
     el("dict-status").textContent =
       "Buscando «" + term + "» en " + (state.dict.abbreviation || state.dict.filename) + "…";
     el("dict-list").innerHTML = '<div class="status">Buscando entradas (solo títulos / lemas)…</div>';
@@ -4289,7 +5205,14 @@
       term: term,
       limit: 40
     }).then(function (rows) {
+      // A newer search, or a topic opened from the Índice, owns the panel now.
+      if (token !== panelSeq.dictionary) return;
       state.dictHits = rows || [];
+      // Lemma fallback: the entries are for «aborrecer», so the Índice shows that topic.
+      var firstHit = state.dictHits[0];
+      if (firstHit && firstHit.fallback && firstHit.queryTerm && firstHit.queryTerm !== term) {
+        renderTopicIndex("dictionary", firstHit.queryTerm);
+      }
       el("dict-status").textContent =
         state.dictHits.length
           ? "✓ " + state.dictHits.length + " entrada(s) para " +
@@ -4300,12 +5223,14 @@
         openSuggest(state.dictHits.map(function (r) {
           return {
             title: r.term,
-            sub: (r.title || r.source || "") + " · " + ((r.definition || "").slice(0, 70).replace(/\s+/g, " ")) + "…",
+            sub: (r.title || r.source || "") + " · " + (plainMarks(r.definition).slice(0, 70).replace(/\s+/g, " ")) + "…",
             data: r
           };
         }), function (item) {
+          panelSeq.dictionary++;
           el("term-search").value = item.data.term;
           renderDictEntries(state.dictHits, item.data.term);
+          renderTopicIndex("dictionary", item.data.term);
           var nodes = el("dict-list").querySelectorAll(".entry");
           for (var i = 0; i < nodes.length; i++) {
             if (nodes[i].classList.contains("hit-selected")) {
@@ -4317,6 +5242,7 @@
       }
       renderDictEntries(state.dictHits, null);
     }).catch(function (e) {
+      if (token !== panelSeq.dictionary) return;
       el("dict-list").innerHTML = '<div class="error">Error al leer el diccionario:<br/>' +
         String(e.message || e) + "</div>";
       renderStudySideRail("dictionary");
@@ -4324,9 +5250,14 @@
   }
 
   function runLexiconSearch(term, fillSuggest) {
+    var token = ++panelSeq.lexicon;
+    probeFocus.lexicon = "";
+    // Searched from another tab (a Strong's link): coming back shows this search, not the old.
+    if (state.tab !== "lexico") rememberPanel("lexico", term);
     if (!state.lex) {
       el("lex-list").innerHTML = '<div class="status">Elige un léxico (recomendado: <b>Strong °</b>).</div>';
       renderStudySideRail("lexicon");
+      renderTopicIndex("lexicon", "");
       return;
     }
     if (!term) {
@@ -4335,10 +5266,35 @@
         "• Hebreo: <b>H1254</b> (crear), <b>H430</b> (Elohim)<br/>" +
         "• Griego: <b>G26</b> (amor), <b>G2316</b> (Dios)<br/>" +
         "• Clic en una palabra en Biblia → se muestra <b>original + ES</b><br/>" +
+        "• O recorre el <b>Índice</b> de la izquierda (Griego · G / Hebreo · H)<br/>" +
         "Una palabra del texto español casi nunca es la clave del léxico; usa el número Strong’s.</div>";
       renderStudySideRail("lexicon");
+      renderTopicIndex("lexicon", "");
       return;
     }
+    // A Greek/Hebrew word goes to its Strong's number when the word table knows it: an exact
+    // lookup instead of a scan of the module's definitions, and the only way to find it in
+    // Multiléxico (it spells Greek as entities, so the scan never matched there). The ● and
+    // a switch of module then follow the number too.
+    var viaWord = null;
+    if (hasOriginalScript(term) && !normStrongCode(term)) {
+      var found = lemmaCodes(term);
+      if (found && found.pick) {
+        viaWord = { word: term, codes: found.codes };
+        term = found.pick;
+        probeFocus.lexicon = term;
+      } else if (found && found.codes.length) {
+        // An accent-free spelling of several numbers: list them, search none.
+        el("lex-list").innerHTML = '<div class="status">' + codeChoicesHtml(term, found.codes) + "</div>";
+        el("lex-status").textContent = "«" + term + "»: varios números posibles (" + found.codes.join(", ") + ")";
+        renderStudySideRail("lexicon");
+        return;
+      } else if (!found) {
+        loadLemmaIndex();
+      }
+    }
+    tiBackTerm.lexicon = term;
+    renderTopicIndex("lexicon", term);
     var t0 = Date.now();
     el("lex-status").textContent =
       "Buscando «" + term + "» en " + (state.lex.abbreviation || state.lex.filename) + "…";
@@ -4349,28 +5305,45 @@
       term: term,
       limit: 20
     }).then(function (rows) {
+      // A newer search, or a topic opened from the Índice, owns the panel now.
+      if (token !== panelSeq.lexicon) return;
       state.lexHits = rows || [];
+      // The Índice follows the entry shown first: a lemma fallback, or the Strong's code a
+      // typed Greek/Hebrew word was found under (ברא → H1254).
+      var firstLex = state.lexHits[0];
+      if (firstLex && firstLex.term) {
+        var shownTerm = firstLex.fallback && firstLex.queryTerm ? firstLex.queryTerm : firstLex.term;
+        if (String(shownTerm).trim().toLowerCase() !== String(term).trim().toLowerCase()) {
+          renderTopicIndex("lexicon", shownTerm);
+        }
+      }
       var ms = Date.now() - t0;
+      var others = viaWord ? viaWord.codes.filter(function (c) { return c !== term; }) : [];
       el("lex-status").textContent =
-        state.lexHits.length
+        (viaWord ? "«" + viaWord.word + "» → " + term +
+          (others.length ? " (misma palabra: " + others.join(", ") + ")" : "") + " · " : "") +
+        (state.lexHits.length
           ? "✓ " + state.lexHits.length + " entrada(s) para " +
             searchedForLabel(state.lexHits, term) +
             " · " + ms + " ms · original + ES arriba · otros a la derecha"
-          : "Sin «" + term + "». Prueba H1254 o G26, o otro léxico en la columna derecha.";
+          : "Sin «" + term + "». Prueba H1254 o G26, o otro léxico en la columna derecha.");
       if (fillSuggest && state.lexHits.length) {
         openSuggest(state.lexHits.map(function (r) {
           return {
             title: r.term,
-            sub: (r.title || r.source || "") + " · " + ((r.definition || "").slice(0, 70).replace(/\s+/g, " ")) + "…",
+            sub: (r.title || r.source || "") + " · " + (plainMarks(r.definition).slice(0, 70).replace(/\s+/g, " ")) + "…",
             data: r
           };
         }), function (item) {
+          panelSeq.lexicon++;
           el("term-search").value = item.data.term;
           renderLexEntries(state.lexHits, item.data.term);
+          renderTopicIndex("lexicon", item.data.term);
         });
       }
       renderLexEntries(state.lexHits, null);
     }).catch(function (e) {
+      if (token !== panelSeq.lexicon) return;
       el("lex-list").innerHTML = '<div class="error">Error al leer el léxico:<br/>' +
         String(e.message || e) + "</div>";
       renderStudySideRail("lexicon");
@@ -4391,20 +5364,19 @@
       return;
     }
     box.innerHTML = "";
-    var ctx = buildLemmaContext(rows);
-    if (!ctx.original && rows[0]) {
+    var ctx = buildLexiconContext(rows);
+    if (!ctx.original && rows[0] && !ctx.strong) {
+      // A word-keyed lexicon: the first original word of its entry. (A number whose entry has
+      // none in its own script gets the Strong's dictionary's word: paintGlossLine.)
       ctx.original = extractOriginalScript(rows[0].definition || "") ||
-        extractOriginalScript(rows[0].term || "") ||
-        (rows[0].term || "");
-    }
-    // Spanish is required for clarity when studying H/G words
-    if (!ctx.spanish && state.selectedWord && !/^[HG]\d+/i.test(state.selectedWord)) {
-      ctx.spanish = state.selectedWord;
+        extractOriginalScript(rows[0].term || "");
     }
     var modLabel = state.lex
       ? (state.lex.abbreviation || state.lex.filename || "")
       : "";
-    box.appendChild(renderLemmaHeaderEl(ctx, modLabel));
+    var header = renderLexCardEl(ctx, modLabel);
+    box.appendChild(header);
+    fillLexCard(header);
 
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
@@ -4412,7 +5384,8 @@
       div.className = "entry" + (selectedTerm && r.term === selectedTerm ? " hit-selected" : "");
       div.innerHTML = '<h2 class="theme-heading"></h2><div class="meta"></div><div class="body"></div>';
       var head = r.term || "";
-      var orig = extractOriginalScript(r.definition || "") || extractOriginalScript(head) || "";
+      var rowCode = normStrongCode(head) || ctx.strong;
+      var orig = originalForCode(r.definition, rowCode) || originalForCode(head, rowCode) || "";
       var titleBits = [];
       if (orig) titleBits.push(orig);
       if (head && head !== orig) titleBits.push(head);
@@ -4427,6 +5400,501 @@
       box.appendChild(div);
     }
     renderStudySideRail("lexicon");
+  }
+
+  /* ---------- Índice (topic index): Diccionario + Léxico, e-Sword style ---------- */
+  // Beside the article, every topic of the module in Spanish alphabetical order (numbers in
+  // natural order: G2 before G10). A search jumps to its exact topic, or marks where the word
+  // would go («▸ pierda»); a click or ↑/↓ opens exactly that topic, and «← Volver» returns to
+  // the search. Big modules (webster-1913: 115 837 topics) come in windows: «Anteriores…» /
+  // «Siguientes…» and scrolling near an edge load more. Same design as Espada 3.7 for macOS
+  // (user choice 2026-11-11), extended to the Léxico, whose Strong's rows also show their
+  // Greek/Hebrew word and get «Griego · G» / «Hebreo · H» jumps.
+
+  var TI_BEFORE = 40;
+  var TI_AFTER = 80;
+  var TI_PAGE = 120;
+  var TI_MAX_ROWS = 600;
+  var TI_KINDS = {
+    dictionary: {
+      nav: "dict-index", list: "dict-list", status: "dict-status", tab: "diccionario",
+      noun: "temas", listLabel: "Temas del diccionario", cipher: "dct", what: "diccionario"
+    },
+    lexicon: {
+      nav: "lex-index", list: "lex-list", status: "lex-status", tab: "lexico",
+      noun: "entradas", listLabel: "Entradas del léxico", cipher: "lex", what: "léxico"
+    }
+  };
+  var tiState = { dictionary: null, lexicon: null }; // the window on screen, per panel
+  var tiSeq = { dictionary: 0, lexicon: 0 };         // newest index request, per panel
+  // Newest content request per panel: a search result or an opened topic paints only while it
+  // is still the latest thing asked for, so a slow search never covers a topic opened after it.
+  var panelSeq = { dictionary: 0, lexicon: 0 };
+  // The term each panel last searched, for «← Volver a «…»».
+  var tiBackTerm = { dictionary: "", lexicon: "" };
+  // A topic opened from the Índice: the ● and the other-module column follow it, and
+  // switching module shows that topic, until the next search.
+  var probeFocus = { dictionary: "", lexicon: "" };
+  var tiKeyTimer = null;
+
+  function tiCount(n) {
+    try { return Number(n || 0).toLocaleString("es"); } catch (e) { return String(n || 0); }
+  }
+
+  function tiHeadHtml(kind, total) {
+    return '<div class="ti-head"><h2 class="ti-title">Índice</h2>' +
+      (total != null
+        ? '<span class="ti-count">' + tiCount(total) + " " + TI_KINDS[kind].noun + "</span>"
+        : "") +
+      "</div>";
+  }
+
+  function tiFromSlice(path, q, slice) {
+    slice = slice || {};
+    return {
+      module: path,
+      query: q,
+      total: slice.total || 0,
+      start: slice.start || 0,
+      focus: slice.focus == null ? null : slice.focus,
+      exact: !!slice.exact,
+      greekStart: slice.greekStart == null ? null : slice.greekStart,
+      hebrewStart: slice.hebrewStart == null ? null : slice.hebrewStart,
+      rows: slice.rows || [],
+      selected: null,
+      loading: false,
+      stale: false
+    };
+  }
+
+  /** Load the window of the panel module's index around `query` and paint it. */
+  function renderTopicIndex(kind, query) {
+    var cfg = TI_KINDS[kind];
+    var nav = el(cfg.nav);
+    if (!nav) return Promise.resolve();
+    // Bumped before anything else: whatever was in flight for this panel is now stale.
+    var seq = ++tiSeq[kind];
+    var mod = currentStudyModule(kind);
+    if (!mod) {
+      tiState[kind] = null;
+      nav.innerHTML = tiHeadHtml(kind, null) +
+        '<div class="ti-empty">Elige un ' + cfg.what + " en el menú de arriba.</div>";
+      return Promise.resolve();
+    }
+    var path = mod.path;
+    var q = String(query || "").trim();
+    var prev = tiState[kind];
+    // Already showing this module around this word: keep it, scroll and selection included.
+    if (prev && prev.module === path && prev.query === q && !prev.stale) return Promise.resolve();
+    if (!prev || prev.module !== path) {
+      nav.innerHTML = tiHeadHtml(kind, null) + '<div class="ti-empty">Cargando índice…</div>';
+    }
+    return invoke("topic_index", {
+      modulePath: path,
+      query: q || null,
+      before: TI_BEFORE,
+      after: TI_AFTER
+    }).then(function (slice) {
+      if (seq !== tiSeq[kind]) return;
+      var cur = currentStudyModule(kind);
+      if (!cur || cur.path !== path) return;
+      tiState[kind] = tiFromSlice(path, q, slice);
+      paintTopicIndex(kind, { scroll: "focus" });
+    }).catch(function (e) {
+      if (seq !== tiSeq[kind]) return;
+      tiState[kind] = null;
+      nav.innerHTML = tiHeadHtml(kind, null) +
+        '<div class="ti-empty ti-error">' + escapeHtml(String((e && e.message) || e)) + "</div>";
+    });
+  }
+
+  function tiMarkerHtml(q) {
+    return '<div class="ti-marker" title="Aquí iría «' + escapeHtml(q) +
+      '»: no es un tema de este módulo">▸ ' + escapeHtml(q) + "</div>";
+  }
+
+  function tiRowHtml(ix, r) {
+    var isFocus = ix.exact && r.pos === ix.focus;
+    var selected = ix.selected != null ? r.rowid === ix.selected : isFocus;
+    var lemma = r.lemma || "";
+    return '<button type="button" class="ti-row' + (isFocus ? " focus" : "") + '" role="option"' +
+      ' aria-selected="' + (selected ? "true" : "false") + '" tabindex="-1"' +
+      ' data-rowid="' + r.rowid + '" data-pos="' + r.pos + '"' +
+      ' title="' + escapeHtml(r.topic + (lemma ? " · " + lemma : "")) + '">' +
+      '<span class="ti-topic">' + escapeHtml(r.topic) + "</span>" +
+      (lemma
+        ? '<span class="ti-lemma ' + originalScriptClass(lemma) + '">' + escapeHtml(lemma) + "</span>"
+        : "") +
+      "</button>";
+  }
+
+  function paintTopicIndex(kind, opts) {
+    opts = opts || {};
+    var cfg = TI_KINDS[kind];
+    var nav = el(cfg.nav);
+    var ix = tiState[kind];
+    if (!nav || !ix) return;
+    var keep = opts.keepScroll ? tiScrollAnchor(nav) : null;
+    var end = ix.start + ix.rows.length;
+    var marker = !ix.exact && !!ix.query && ix.focus != null;
+    var html = tiHeadHtml(kind, ix.total);
+    if (ix.greekStart != null && ix.hebrewStart != null) {
+      // Which section is on screen: the first row past the Hebrew start is Hebrew.
+      var inHebrew = ix.rows.length && ix.rows[0].pos >= ix.hebrewStart;
+      html += '<div class="ti-jumps" role="group" aria-label="Ir a una sección">' +
+        '<button type="button" class="ti-jump' + (inHebrew ? "" : " active") +
+        '" data-jump="' + ix.greekStart + '" title="Griego: G1, G2, G3…">Griego · G</button>' +
+        '<button type="button" class="ti-jump' + (inHebrew ? " active" : "") +
+        '" data-jump="' + ix.hebrewStart + '" title="Hebreo: H1, H2, H3…">Hebreo · H</button>' +
+        "</div>";
+    }
+    html += '<div class="ti-scroll">';
+    if (ix.start > 0) {
+      html += '<button type="button" class="ti-more" data-dir="prev">▲ Anteriores…</button>';
+    }
+    html += '<div class="ti-list" role="listbox" aria-label="' + cfg.listLabel + '">';
+    if (!ix.total) html += '<div class="ti-empty">Este módulo no tiene temas.</div>';
+    for (var i = 0; i < ix.rows.length; i++) {
+      var r = ix.rows[i];
+      if (marker && r.pos === ix.focus) html += tiMarkerHtml(ix.query);
+      html += tiRowHtml(ix, r);
+    }
+    if (marker && ix.focus >= end && end === ix.total) html += tiMarkerHtml(ix.query);
+    html += "</div>";
+    if (end < ix.total) {
+      html += '<button type="button" class="ti-more" data-dir="next">▼ Siguientes…</button>';
+    }
+    html += "</div>";
+    nav.innerHTML = html;
+    tiFixTabStop(nav, ix);
+    nav.onclick = function (ev) { onTopicIndexClick(kind, ev); };
+    nav.onkeydown = function (ev) { onTopicIndexKey(kind, ev); };
+    var sc = nav.querySelector(".ti-scroll");
+    if (sc) sc.onscroll = function () { onTopicIndexScroll(kind); };
+    if (keep) {
+      tiRestoreScroll(nav, keep);
+    } else if (opts.scroll === "focus") {
+      tiScrollTo(nav, nav.querySelector(".ti-marker") ||
+        nav.querySelector('.ti-row[aria-selected="true"]') ||
+        nav.querySelector(".ti-row.focus"), "center");
+    } else if (opts.scroll != null) {
+      tiScrollTo(nav, nav.querySelector('.ti-row[data-pos="' + opts.scroll + '"]'), "start");
+    }
+    if (opts.focusPos != null) {
+      var f = nav.querySelector('.ti-row[data-pos="' + opts.focusPos + '"]');
+      if (f) tiMoveFocus(nav, f);
+    }
+  }
+
+  /** One tab stop for the whole list (the selected row, else the query's place, else the top). */
+  function tiFixTabStop(nav, ix) {
+    var rows = nav.querySelectorAll(".ti-row");
+    if (!rows.length) return;
+    var stop = nav.querySelector('.ti-row[aria-selected="true"]') ||
+      (ix.focus != null ? nav.querySelector('.ti-row[data-pos="' + ix.focus + '"]') : null) ||
+      rows[0];
+    for (var i = 0; i < rows.length; i++) rows[i].tabIndex = rows[i] === stop ? 0 : -1;
+  }
+
+  function tiMoveFocus(nav, row) {
+    var rows = nav.querySelectorAll(".ti-row");
+    for (var i = 0; i < rows.length; i++) rows[i].tabIndex = rows[i] === row ? 0 : -1;
+    try { row.focus({ preventScroll: true }); } catch (e) { row.focus(); }
+    var sc = nav.querySelector(".ti-scroll");
+    if (!sc) return;
+    if (row.offsetTop < sc.scrollTop) {
+      sc.scrollTop = row.offsetTop - 4;
+    } else if (row.offsetTop + row.offsetHeight > sc.scrollTop + sc.clientHeight) {
+      sc.scrollTop = row.offsetTop + row.offsetHeight - sc.clientHeight + 4;
+    }
+  }
+
+  /** Scroll only the index (never the page): `.ti-scroll` is the rows' offsetParent. */
+  function tiScrollTo(nav, target, where) {
+    var sc = nav.querySelector(".ti-scroll");
+    if (!sc || !target) return;
+    var top = where === "center"
+      ? target.offsetTop - (sc.clientHeight - target.offsetHeight) / 2
+      : target.offsetTop - 4;
+    sc.scrollTop = Math.max(0, top);
+  }
+
+  /** The first visible row and how far it sits from the top, to keep the view still on repaint. */
+  function tiScrollAnchor(nav) {
+    var sc = nav.querySelector(".ti-scroll");
+    if (!sc) return null;
+    var rows = sc.querySelectorAll(".ti-row");
+    for (var i = 0; i < rows.length; i++) {
+      var bottom = rows[i].offsetTop + rows[i].offsetHeight;
+      if (bottom > sc.scrollTop) {
+        return { pos: rows[i].getAttribute("data-pos"), offset: rows[i].offsetTop - sc.scrollTop };
+      }
+    }
+    return null;
+  }
+
+  function tiRestoreScroll(nav, keep) {
+    var sc = nav.querySelector(".ti-scroll");
+    var row = sc && sc.querySelector('.ti-row[data-pos="' + keep.pos + '"]');
+    if (row) sc.scrollTop = Math.max(0, row.offsetTop - keep.offset);
+  }
+
+  /** «Anteriores…» / «Siguientes…»: the next window of the same index, the view held still. */
+  function loadMoreTopicIndex(kind, dir, focusPos) {
+    var ix = tiState[kind];
+    if (!ix || ix.loading) return Promise.resolve(false);
+    var end = ix.start + ix.rows.length;
+    if ((dir === "prev" && ix.start <= 0) || (dir === "next" && end >= ix.total)) {
+      return Promise.resolve(false);
+    }
+    var anchor = dir === "prev" ? Math.max(0, ix.start - TI_PAGE) : end;
+    ix.loading = true;
+    return invoke("topic_index", {
+      modulePath: ix.module,
+      query: null,
+      anchor: anchor,
+      before: 0,
+      after: TI_PAGE
+    }).then(function (slice) {
+      ix.loading = false;
+      // A new search replaced this window while the page was loading.
+      if (tiState[kind] !== ix || !slice) return false;
+      var rows = slice.rows || [];
+      var add;
+      if (dir === "prev") {
+        add = rows.filter(function (r) { return r.pos < ix.start; });
+        if (!add.length) return false;
+        ix.rows = add.concat(ix.rows);
+        ix.start = add[0].pos;
+        if (ix.rows.length > TI_MAX_ROWS) ix.rows = ix.rows.slice(0, TI_MAX_ROWS);
+      } else {
+        add = rows.filter(function (r) { return r.pos >= end; });
+        if (!add.length) return false;
+        ix.rows = ix.rows.concat(add);
+        if (ix.rows.length > TI_MAX_ROWS) {
+          ix.rows = ix.rows.slice(ix.rows.length - TI_MAX_ROWS);
+          ix.start = ix.rows[0].pos;
+        }
+      }
+      ix.stale = true;
+      paintTopicIndex(kind, { keepScroll: true, focusPos: focusPos });
+      return true;
+    }).catch(function () {
+      ix.loading = false;
+      return false;
+    });
+  }
+
+  /** «Griego · G» / «Hebreo · H»: a fresh window starting at that section. */
+  function jumpTopicIndex(kind, pos) {
+    var ix = tiState[kind];
+    if (!ix || !isFinite(pos)) return;
+    var seq = ++tiSeq[kind];
+    invoke("topic_index", {
+      modulePath: ix.module,
+      query: ix.query || null,
+      anchor: pos,
+      before: 0,
+      after: TI_PAGE
+    }).then(function (slice) {
+      if (seq !== tiSeq[kind] || tiState[kind] !== ix) return;
+      var next = tiFromSlice(ix.module, ix.query, slice);
+      next.selected = ix.selected;
+      next.stale = true;
+      tiState[kind] = next;
+      paintTopicIndex(kind, { scroll: pos, focusPos: pos });
+    }).catch(function () {});
+  }
+
+  function onTopicIndexClick(kind, ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var more = t.closest(".ti-more");
+    if (more) {
+      loadMoreTopicIndex(kind, more.getAttribute("data-dir"));
+      return;
+    }
+    var jump = t.closest(".ti-jump");
+    if (jump) {
+      jumpTopicIndex(kind, parseInt(jump.getAttribute("data-jump"), 10));
+      return;
+    }
+    var row = t.closest(".ti-row");
+    if (row) openIndexTopic(kind, Number(row.getAttribute("data-rowid")));
+  }
+
+  /** ↑/↓ (and PageUp/PageDown, Home/End) walk the topics and open them, like e-Sword. */
+  function onTopicIndexKey(kind, ev) {
+    var row = ev.target && ev.target.closest ? ev.target.closest(".ti-row") : null;
+    var k = ev.key;
+    if (!row || ["ArrowDown", "ArrowUp", "PageDown", "PageUp", "Home", "End"].indexOf(k) < 0) return;
+    ev.preventDefault();
+    var nav = el(TI_KINDS[kind].nav);
+    var rows = Array.prototype.slice.call(nav.querySelectorAll(".ti-row"));
+    var i = rows.indexOf(row);
+    var j = k === "ArrowDown" ? i + 1
+      : k === "ArrowUp" ? i - 1
+      : k === "PageDown" ? Math.min(rows.length - 1, i + 10)
+      : k === "PageUp" ? Math.max(0, i - 10)
+      : k === "Home" ? 0
+      : rows.length - 1;
+    var pos = Number(row.getAttribute("data-pos"));
+    if (j < 0 || j >= rows.length) {
+      var want = j < 0 ? pos - 1 : pos + 1;
+      loadMoreTopicIndex(kind, j < 0 ? "prev" : "next", want).then(function (ok) {
+        var f = ok && nav.querySelector('.ti-row[data-pos="' + want + '"]');
+        if (f) openIndexTopic(kind, Number(f.getAttribute("data-rowid")));
+      });
+      return;
+    }
+    var next = rows[j];
+    tiMoveFocus(nav, next);
+    clearTimeout(tiKeyTimer);
+    tiKeyTimer = setTimeout(function () {
+      openIndexTopic(kind, Number(next.getAttribute("data-rowid")));
+    }, 140);
+  }
+
+  function onTopicIndexScroll(kind) {
+    var ix = tiState[kind];
+    var nav = el(TI_KINDS[kind].nav);
+    var sc = nav && nav.querySelector(".ti-scroll");
+    if (!ix || !sc || ix.loading) return;
+    if (sc.scrollTop < 40 && ix.start > 0) {
+      loadMoreTopicIndex(kind, "prev");
+    } else if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 40 &&
+        ix.start + ix.rows.length < ix.total) {
+      loadMoreTopicIndex(kind, "next");
+    }
+  }
+
+  /** Show exactly one index topic in the article column. */
+  function openIndexTopic(kind, rowid) {
+    var cfg = TI_KINDS[kind];
+    var ix = tiState[kind];
+    var mod = currentStudyModule(kind);
+    if (!ix || !mod || mod.path !== ix.module || !isFinite(rowid)) return;
+    ix.selected = rowid;
+    // Browsed away from the search: the next search, even for the same word, re-centers.
+    ix.stale = true;
+    var nav = el(cfg.nav);
+    var rowEls = nav ? nav.querySelectorAll(".ti-row") : [];
+    for (var i = 0; i < rowEls.length; i++) {
+      var on = Number(rowEls[i].getAttribute("data-rowid")) === rowid;
+      rowEls[i].setAttribute("aria-selected", on ? "true" : "false");
+    }
+    var row = null;
+    for (var k = 0; k < ix.rows.length; k++) {
+      if (ix.rows[k].rowid === rowid) { row = ix.rows[k]; break; }
+    }
+    var token = ++panelSeq[kind];
+    closeSuggest();
+    invoke("get_topic_entry", { modulePath: ix.module, rowid: rowid }).then(function (entry) {
+      if (token !== panelSeq[kind]) return;
+      renderIndexEntry(kind, entry, row, mod);
+      // The ● and the other-module column now follow the topic on screen.
+      probeFocus[kind] = indexProbeTerm(kind, (entry && entry.term) || (row && row.topic) || "");
+      refreshContentFlags(kind, studyModulesForKind(kind), null);
+    }).catch(function (e) {
+      if (token !== panelSeq[kind]) return;
+      el(cfg.list).innerHTML = '<div class="error">' + escapeHtml(String((e && e.message) || e)) + "</div>";
+    });
+  }
+
+  /** What to probe other modules for, for an opened topic: a lexicon row that starts with a
+   *  Strong's code («G0027», «H 430 …») by its code, anything else by its own text. */
+  function indexProbeTerm(kind, topic) {
+    var t = String(topic || "").trim();
+    if (kind === "lexicon") {
+      var m = /^([HG])\s*0*(\d{1,5})(?!\d)/i.exec(t);
+      if (m) return m[1].toUpperCase() + m[2];
+    }
+    return t;
+  }
+
+  function renderIndexEntry(kind, entry, row, mod) {
+    var cfg = TI_KINDS[kind];
+    var box = el(cfg.list);
+    if (!box) return;
+    var back = tiBackTerm[kind];
+    var modLabel = mod.abbreviation || mod.filename || "";
+    box.innerHTML = "";
+
+    var bar = document.createElement("div");
+    bar.className = "ti-back-bar";
+    if (back) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "ti-back";
+      b.textContent = "← Volver a «" + back + "»";
+      b.onclick = function () { tiGoBack(kind); };
+      bar.appendChild(b);
+    }
+    var crumb = document.createElement("span");
+    crumb.className = "ti-crumb";
+    crumb.textContent = "Desde el Índice · " + modLabel;
+    bar.appendChild(crumb);
+    box.appendChild(bar);
+
+    if (!entry) {
+      var gone = document.createElement("div");
+      gone.className = "status";
+      gone.textContent = "Esta entrada ya no está en el módulo (¿cambió el archivo?).";
+      box.appendChild(gone);
+      return;
+    }
+    var lemma = (row && row.lemma) || "";
+    var div = document.createElement("div");
+    div.className = "entry";
+    div.innerHTML = '<h2 class="theme-heading"></h2><div class="meta"></div><div class="body"></div>';
+    var h = div.querySelector("h2");
+    h.textContent = entry.term || (row && row.topic) || "";
+    if (lemma) {
+      var ls = document.createElement("span");
+      ls.className = "ti-entry-lemma " + originalScriptClass(lemma);
+      ls.textContent = lemma;
+      h.appendChild(ls);
+    }
+    div.querySelector(".meta").textContent = entry.title || entry.source || modLabel;
+    // A Strong's number opened from the Índice gets the same card as a search or a Bible word:
+    // number · word — pronunciation, then the Spanish set apart. The Índice's own headword is
+    // the dictionary form; a word clicked in the Bible keeps its verse form and its Spanish.
+    var glossCode = kind === "lexicon" ? normStrongCode(entry.term || (row && row.topic)) : "";
+    var card = null;
+    if (glossCode) {
+      var ictx = buildLexiconContext([{ term: glossCode, definition: entry.definition || "" }]);
+      if (lemma) ictx.original = lemma; // the Índice's headword: the dictionary form
+      card = renderLexCardEl(ictx, modLabel);
+      box.appendChild(card);
+    }
+    var body = div.querySelector(".body");
+    if (!entry.definition) {
+      body.innerHTML = '<span class="status">Esta entrada no tiene texto en ' + escapeHtml(modLabel) + ".</span>";
+    } else if (isCipherText(entry.definition)) {
+      body.innerHTML = cipherNoticeHtml(cfg.cipher);
+    } else {
+      body.innerHTML = formatRichText(entry.definition);
+    }
+    box.appendChild(div);
+    if (card) fillLexCard(card);
+    box.scrollTop = 0;
+    el(cfg.status).textContent = "Índice · " + (entry.term || "") + (lemma ? " " + lemma : "") +
+      " · " + modLabel + (back ? " · «← Volver» regresa a «" + back + "»" : "");
+  }
+
+  /** «← Volver a «palabra»»: the panel's last search again, the Índice back on that word. */
+  function tiGoBack(kind) {
+    var term = tiBackTerm[kind];
+    if (!term) return;
+    var ix = tiState[kind];
+    if (ix) {
+      ix.selected = null;
+      ix.stale = true;
+    }
+    var input = el("term-search");
+    if (input && state.tab === TI_KINDS[kind].tab) input.value = term;
+    if (kind === "dictionary") runDictionarySearch(term, false);
+    else runLexiconSearch(term, false);
   }
 
   function goToStudyTab(tab) {
@@ -4588,12 +6056,18 @@
       };
     }
     if (el("sel-mod")) {
+      // ● that arrived while the menu had focus were marked in place; sort it now.
+      el("sel-mod").onblur = function () {
+        var pending = state._menuSortPending;
+        if (pending) applyContentFlagsToDropdown(pending, true);
+      };
       el("sel-mod").onchange = function () {
         var path = this.value;
         if (state.tab === "comentario") {
           for (var i = 0; i < state.commentaries.length; i++) {
             if (state.commentaries[i].path === path) state.cmt = state.commentaries[i];
           }
+          saveStudyModulePrefs();
           var t = el("term-search") ? el("term-search").value.trim() : "";
           if (t) runCommentarySearch(t, true);
           else loadCommentariesForVerse();
@@ -4601,16 +6075,24 @@
           for (var j = 0; j < state.dictionaries.length; j++) {
             if (state.dictionaries[j].path === path) state.dict = state.dictionaries[j];
           }
-          var td = (el("term-search") && el("term-search").value.trim()) || state.selectedWord || "";
+          saveStudyModulePrefs();
+          // A topic opened from the Índice is what the ● promised: show it in the new module.
+          var td = probeFocus.dictionary ||
+            (el("term-search") && el("term-search").value.trim()) || state.selectedWord || "";
+          if (td && el("term-search")) el("term-search").value = td;
           if (td) runDictionarySearch(td, true);
           else if (el("dict-list")) {
-            el("dict-list").innerHTML = '<div class="status">Escribe una palabra para buscar en este diccionario.</div>';
+            panelSeq.dictionary++;
+            el("dict-list").innerHTML = '<div class="status">Escribe una palabra para buscar en este diccionario, o elige un tema del <b>Índice</b>.</div>';
+            renderTopicIndex("dictionary", "");
           }
         } else if (state.tab === "lexico") {
           for (var k = 0; k < state.lexicons.length; k++) {
             if (state.lexicons[k].path === path) state.lex = state.lexicons[k];
           }
-          var tl = (el("term-search") && el("term-search").value.trim()) || state.selectedWord || "H1254";
+          saveStudyModulePrefs();
+          var tl = probeFocus.lexicon ||
+            (el("term-search") && el("term-search").value.trim()) || state.selectedWord || "H1254";
           if (el("term-search")) el("term-search").value = tl;
           runLexiconSearch(tl, true);
         } else if (state.tab === "referencia") {
@@ -5083,6 +6565,9 @@
         document.title = "Espada 3.7 (Windows)";
         window.__ADC_FULL_WIRED__ = true;
         window.__ADC_START_RUNNING__ = false;
+        // The Greek/Hebrew word table, read in the background once the chapter is up, so a
+        // hovered word previews its entry from the first try.
+        setTimeout(function () { loadLemmaIndex(); }, 2500);
         // Acrylic only after UI is live (avoids compositor crash during module scan)
         try { markGlassBootReady(); } catch (ge) { console.warn(ge); }
       } catch (err) {

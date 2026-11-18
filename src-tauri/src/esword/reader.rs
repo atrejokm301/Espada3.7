@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use super::books::{book_by_number, book_name_by_number};
 use super::catalog::table_exists;
+use super::bible_titles::{find_titles, Titles};
+use super::sections::Titles as StudyTitles;
 use super::text::cell_to_text;
 
 /// Escape SQL `LIKE` metacharacters in user input. Paired with `ESCAPE '\'` in
@@ -63,7 +65,7 @@ fn open_ro_conn(path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-fn with_conn<T>(
+pub(super) fn with_conn<T>(
     path: &Path,
     f: impl FnOnce(&Connection, &str) -> Result<T, String>,
 ) -> Result<T, String> {
@@ -107,7 +109,7 @@ fn with_conn<T>(
     f(&conn, &key)
 }
 
-fn table_exists_cached(conn: &Connection, path_key: &str, name: &str) -> bool {
+pub(super) fn table_exists_cached(conn: &Connection, path_key: &str, name: &str) -> bool {
     if let Ok(mut memo) = SCHEMA_MEMO.lock() {
         let entry = memo.entry(path_key.to_string()).or_insert_with(|| SchemaMemo {
             tables: HashMap::new(),
@@ -124,7 +126,7 @@ fn table_exists_cached(conn: &Connection, path_key: &str, name: &str) -> bool {
     table_exists(conn, name)
 }
 
-fn column_set_cached(conn: &Connection, path_key: &str, table: &str) -> HashSet<String> {
+pub(super) fn column_set_cached(conn: &Connection, path_key: &str, table: &str) -> HashSet<String> {
     if let Ok(mut memo) = SCHEMA_MEMO.lock() {
         let entry = memo.entry(path_key.to_string()).or_insert_with(|| SchemaMemo {
             tables: HashMap::new(),
@@ -141,7 +143,7 @@ fn column_set_cached(conn: &Connection, path_key: &str, table: &str) -> HashSet<
     column_set(conn, table)
 }
 
-fn module_labels_cached(conn: &Connection, path: &Path) -> (String, String) {
+pub(super) fn module_labels_cached(conn: &Connection, path: &Path) -> (String, String) {
     let key = path.to_string_lossy().to_string();
     if let Ok(mut memo) = SCHEMA_MEMO.lock() {
         let entry = memo.entry(key).or_insert_with(|| SchemaMemo {
@@ -266,7 +268,7 @@ pub struct BibleSearchHit {
     pub module: String,
 }
 
-const MAX_TEXT: usize = 50_000;
+pub(super) const MAX_TEXT: usize = 50_000;
 
 static RE_BLU: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?is)<blu>(.*?)</blu>").unwrap());
 static RE_NUM: Lazy<Regex> =
@@ -309,10 +311,37 @@ pub fn get_chapter(
             })
             .map_err(|e| e.to_string())?;
 
+        let rows: Vec<(i32, i32, i32, Value)> =
+            rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+        // Section titles stay in the text, marked (see bible_titles.rs). Plain-text titles are
+        // read only when few verses carry them: a module that opens every verse on a new line
+        // would turn its first lines into titles.
+        let found: Vec<Titles> = rows
+            .iter()
+            .map(|(_, _, _, val)| match val {
+                Value::Text(raw) => find_titles(raw, true),
+                _ => Titles::default(),
+            })
+            .collect();
+        let text_leads = rows
+            .iter()
+            .zip(&found)
+            .filter(|((_, _, _, val), t)| matches!(val, Value::Text(raw) if t.has_text_lead(raw)))
+            .count();
+        let text_lines = text_leads <= 3 || text_leads * 5 <= rows.len() * 2;
         let mut verses = Vec::new();
-        for r in rows {
-            let (b, ch, v, scripture) = r.map_err(|e| e.to_string())?;
-            let text = cell_to_text(&scripture).unwrap_or_default();
+        for ((b, ch, v, scripture), titles) in rows.into_iter().zip(found) {
+            let text = match &scripture {
+                Value::Text(raw) => {
+                    let titles = if text_lines { titles } else { find_titles(raw, false) };
+                    if titles.is_empty() {
+                        cell_to_text(&scripture).unwrap_or_default()
+                    } else {
+                        super::text::clean_text(&titles.mark(raw))
+                    }
+                }
+                _ => cell_to_text(&scripture).unwrap_or_default(),
+            };
             if text.is_empty() {
                 continue;
             }
@@ -370,6 +399,7 @@ pub fn get_commentaries(
             .unwrap_or_default();
 
         let mut results = Vec::new();
+        let titles = StudyTitles::new(conn, path_key);
 
         // 1) Verse-level only when requested
         if include_verse && table_exists_cached(conn, path_key, "VerseCommentary") {
@@ -418,6 +448,7 @@ pub fn get_commentaries(
                             &title,
                             "verse",
                             &module_name,
+                            &titles,
                         );
                     }
                 }
@@ -462,6 +493,7 @@ pub fn get_commentaries(
                                 &title,
                                 "verse",
                                 &module_name,
+                                &titles,
                             );
                         }
                     }
@@ -490,7 +522,7 @@ pub fn get_commentaries(
                         })
                     {
                         for r in rows.flatten() {
-                            if let Some(text) = usable_text(&r) {
+                            if let Some(text) = titles.display(&r, 3) {
                                 results.push(CommentaryResult {
                                     reference: format!("{book_name} {chapter}"),
                                     source: abbr.clone(),
@@ -513,7 +545,7 @@ pub fn get_commentaries(
             {
                 if let Ok(rows) = stmt.query_map([book_number], |row| row.get::<_, Value>(0)) {
                     for r in rows.flatten() {
-                        if let Some(text) = usable_text(&r) {
+                        if let Some(text) = titles.display(&r, 3) {
                             results.push(CommentaryResult {
                                 reference: book_name.clone(),
                                 source: abbr.clone(),
@@ -544,8 +576,9 @@ fn push_comment(
     title: &str,
     level: &str,
     module_name: &str,
+    titles: &StudyTitles,
 ) {
-    if let Some(text) = usable_text(&comments) {
+    if let Some(text) = titles.display(&comments, 3) {
         let ref_label = if cb == ce && vb == ve {
             format!("{book_name} {cb}:{vb}")
         } else {
@@ -560,14 +593,6 @@ fn push_comment(
             module: module_name.to_string(),
         });
     }
-}
-
-fn usable_text(val: &Value) -> Option<String> {
-    let text = cell_to_text(val)?;
-    if text.len() < 3 {
-        return None;
-    }
-    Some(text)
 }
 
 /// Fast EXISTS probe — respects the same level filters as the commentary view.
@@ -730,7 +755,6 @@ pub fn probe_lexicon_fast(module_path: &str, term: &str) -> ContentProbe {
         };
     }
     let path = PathBuf::from(module_path);
-    let strong = normalize_strongs(term).unwrap_or_else(|| term.to_uppercase());
     let res = with_conn(&path, |conn, path_key| {
         let table = if table_exists_cached(conn, path_key, "Lexicon") {
             "Lexicon"
@@ -739,13 +763,26 @@ pub fn probe_lexicon_fast(module_path: &str, term: &str) -> ContentProbe {
         } else {
             return Ok(false);
         };
-        let sql = format!(
-            "SELECT 1 FROM [{table}] WHERE Topic = ?1 OR Topic LIKE ?2 ESCAPE '\\' LIMIT 1"
-        );
-        let like = format!("{}%", like_escape(&strong));
+        // The lookup's own topic keys, in one pass over the table: these modules have no
+        // index on Topic, so each separate query would be another full scan.
+        let keys = lexicon_topic_keys(term);
+        let test: Vec<String> = keys
+            .iter()
+            .enumerate()
+            .map(|(i, (_, is_like))| {
+                if *is_like {
+                    format!("Topic LIKE ?{} ESCAPE '\\'", i + 1)
+                } else {
+                    format!("Topic = ?{}", i + 1)
+                }
+            })
+            .collect();
+        let sql = format!("SELECT 1 FROM [{table}] WHERE {} LIMIT 1", test.join(" OR "));
         if let Ok(mut stmt) = conn.prepare(&sql) {
             if stmt
-                .query_row(rusqlite::params![strong, like], |_| Ok(1i32))
+                .query_row(rusqlite::params_from_iter(keys.iter().map(|(k, _)| k)), |_| {
+                    Ok(1i32)
+                })
                 .is_ok()
             {
                 return Ok(true);
@@ -1012,6 +1049,7 @@ pub fn search_commentaries(
             .unwrap_or_default();
         let like = format!("%{}%", like_escape(term));
         let mut out = Vec::new();
+        let titles = StudyTitles::new(conn, path_key);
 
         if table_exists_cached(conn, path_key, "VerseCommentary") {
             // Only text columns — blobs can't be LIKE-searched meaningfully
@@ -1029,7 +1067,7 @@ pub fn search_commentaries(
                 }) {
                     for r in rows.flatten() {
                         let (b, ch, v, comments) = r;
-                        if let Some(text) = usable_text_filter(&comments) {
+                        if let Some(text) = titles.display(&comments, 2) {
                             let book_name = book_name_by_number(b)
                                 .map(str::to_string)
                                 .unwrap_or_else(|| format!("Libro {b}"));
@@ -1134,6 +1172,7 @@ fn lookup_dictionary_inner(
         let mut ranked: Vec<(i32, DictionaryResult)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let term_norm = strip_accents(&term.to_uppercase());
+        let titles = StudyTitles::new(conn, path_key);
 
         // Phase A: exact Topic (several case variants — e-Sword topics are often UPPERCASE)
         for pat in dict_exact_patterns(term) {
@@ -1149,6 +1188,7 @@ fn lookup_dictionary_inner(
                 &module_name,
                 100, // exact score
                 &term_norm,
+                &titles,
             );
         }
 
@@ -1167,6 +1207,7 @@ fn lookup_dictionary_inner(
                     &module_name,
                     80,
                     &term_norm,
+                    &titles,
                 );
             }
         }
@@ -1188,6 +1229,7 @@ fn lookup_dictionary_inner(
                     &module_name,
                     40,
                     &term_norm,
+                    &titles,
                 );
             }
         }
@@ -1267,6 +1309,7 @@ fn push_dict_rows(
     module_name: &str,
     base_score: i32,
     term_norm: &str,
+    titles: &StudyTitles,
 ) {
     if ranked.len() as i32 >= limit * 2 {
         // gather a bit extra for ranking, then trim
@@ -1298,7 +1341,7 @@ fn push_dict_rows(
                 continue;
             }
         }
-        let Some(definition) = usable_text_filter(&def) else {
+        let Some(definition) = titles.display(&def, 2) else {
             continue;
         };
         let score = score_dict_topic(&topic, term_norm, base_score);
@@ -1378,8 +1421,10 @@ pub fn lookup_lexicon(
         return Ok(hits);
     }
     // A Strong's code either exists or it does not; guessing lemmas off it is
-    // meaningless, so only fall back for word-shaped queries.
-    if normalize_strongs(term).is_some() {
+    // meaningless, so only fall back for word-shaped queries. Nor for a Greek or Hebrew
+    // word: the variants are Spanish inflections, and each one repeats the full
+    // definition scan — 12 s per hover in Multiléxico, which spells Greek as entities.
+    if normalize_strongs(term).is_some() || contains_hebrew_or_greek(term) {
         return Ok(vec![]);
     }
     for cand in lemma_candidates(term)
@@ -1429,27 +1474,9 @@ fn lookup_lexicon_inner(
 
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        let titles = StudyTitles::new(conn, path_key);
 
-        // Build ordered candidates for Topic as (pattern, is_like) — see topic_patterns()
-        let mut keys: Vec<(String, bool)> = Vec::new();
-        if let Some(s) = normalize_strongs(term) {
-            keys.push((s.clone(), false));
-            // Also with leading zeros variants H01254
-            if let Some(rest) = s.get(1..) {
-                if let Ok(n) = rest.parse::<u32>() {
-                    keys.push((format!("{}{n}", &s[..1]), false));
-                    keys.push((format!("{}{:04}", &s[..1], n), false));
-                    keys.push((format!("{}{:05}", &s[..1], n), false));
-                }
-            }
-        }
-        keys.push((term.to_string(), false));
-        keys.push((term.to_uppercase(), false));
-        keys.push((format!("{}%", like_escape(&term.to_uppercase())), true));
-        if let Some(s) = normalize_strongs(term) {
-            keys.push((format!("{s}%"), true));
-        }
-
+        let keys = lexicon_topic_keys(term);
         for (key, is_like) in &keys {
             if out.len() as i32 >= limit {
                 break;
@@ -1471,7 +1498,7 @@ fn lookup_lexicon_inner(
                         if !seen.insert(topic.clone()) {
                             continue;
                         }
-                        if let Some(definition) = usable_text_filter(&def) {
+                        if let Some(definition) = titles.display(&def, 2) {
                             out.push(LexiconResult {
                                 term: topic,
                                 source: abbr.clone(),
@@ -1512,7 +1539,7 @@ fn lookup_lexicon_inner(
                             if !seen.insert(topic.clone()) {
                                 continue;
                             }
-                            if let Some(definition) = usable_text_filter(&def) {
+                            if let Some(definition) = titles.display(&def, 2) {
                                 // Prefer topics that look like Strong's numbers
                                 out.push(LexiconResult {
                                     term: topic,
@@ -1541,6 +1568,31 @@ fn lookup_lexicon_inner(
 
         Ok(out)
     })
+}
+
+/// Topic keys a lexicon term is looked up by, in order, as `(pattern, is_like)`. A Strong's
+/// code is tried the ways modules store it (G26, G0026, G00026) before the prefix match.
+/// The lookup and the ● probe both use this list, so a ● always means the lookup finds it.
+fn lexicon_topic_keys(term: &str) -> Vec<(String, bool)> {
+    let term = term.trim();
+    let strong = normalize_strongs(term);
+    let mut keys: Vec<(String, bool)> = Vec::new();
+    if let Some(s) = &strong {
+        keys.push((s.clone(), false));
+        if let Ok(n) = s[1..].parse::<u32>() {
+            keys.push((format!("{}{:04}", &s[..1], n), false));
+            keys.push((format!("{}{:05}", &s[..1], n), false));
+        }
+    }
+    keys.push((term.to_string(), false));
+    keys.push((term.to_uppercase(), false));
+    keys.push((format!("{}%", like_escape(&term.to_uppercase())), true));
+    if let Some(s) = &strong {
+        keys.push((format!("{s}%"), true));
+    }
+    let mut seen = HashSet::new();
+    keys.retain(|k| seen.insert(k.clone()));
+    keys
 }
 
 fn contains_hebrew_or_greek(s: &str) -> bool {
@@ -1641,18 +1693,6 @@ fn script_search_patterns(term: &str) -> Vec<String> {
 
     pats.dedup();
     pats
-}
-
-fn usable_text_filter(val: &Value) -> Option<String> {
-    let text = cell_to_text(val)?;
-    if text.starts_with("[Módulo cifrado") || text.starts_with("[Contenido binario") {
-        // Still return so UI can explain — but mark
-        return Some(text);
-    }
-    if text.len() < 2 {
-        return None;
-    }
-    Some(text)
 }
 
 /// Patterns for probes / legacy callers — **Topic headwords only** (no definition body).
@@ -1883,7 +1923,7 @@ fn module_labels(conn: &Connection, path: &Path) -> (String, String) {
     (stem.clone(), stem)
 }
 
-fn truncate(s: &str, max: usize) -> String {
+pub(super) fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {

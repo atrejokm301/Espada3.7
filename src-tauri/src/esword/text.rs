@@ -42,6 +42,38 @@ static RE_HEB_TAG: Lazy<Regex> =
 pub const WOC_OPEN: &str = "\u{E000}";
 pub const WOC_CLOSE: &str = "\u{E001}";
 
+/// Section titles for the page (see `sections.rs`): `TITLE_OPEN Diccionario Strong TITLE_CLOSE`,
+/// or for an author line `TITLE_OPEN San Agustín, TITLE_SPLIT de sermone Domini, 1,1 TITLE_CLOSE`.
+pub const TITLE_OPEN: &str = "\u{E002}";
+pub const TITLE_CLOSE: &str = "\u{E003}";
+pub const TITLE_SPLIT: &str = "\u{E004}";
+
+/// Bold and italic runs kept through cleaning while section titles are looked for; they never
+/// reach the page. Each bold-open is followed by one character U+F0000 + n: the markup that
+/// opened the run is `sigs[n]` (see `clean_text_emphasis`).
+pub(crate) const EM_BOLD_OPEN: char = '\u{E010}';
+pub(crate) const EM_BOLD_CLOSE: char = '\u{E011}';
+pub(crate) const EM_ITALIC_OPEN: char = '\u{E012}';
+pub(crate) const EM_ITALIC_CLOSE: char = '\u{E013}';
+pub(crate) const EM_SIG_BASE: u32 = 0xF0000;
+const EM_SIG_LAST: u32 = 0xFFFFD;
+
+/// Bold runs: a heading tag, <b>, <strong>, or a span set in bold. Inner groups 1–4.
+static RE_EM_BOLD: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?is)<h[1-6]\b[^>]*>(.*?)</h[1-6]\s*>|<b\b[^>]*>(.*?)</b\s*>|<strong\b[^>]*>(.*?)</strong\s*>|<span\b[^>]*font-weight\s*:\s*(?:bold|[6-9]00)[^>]*>(.*?)</span\s*>",
+    )
+    .unwrap()
+});
+/// Italic runs: <i>, <em>, or a span set in italics. Inner groups 1–3.
+static RE_EM_ITALIC: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?is)<i\b[^>]*>(.*?)</i\s*>|<em\b[^>]*>(.*?)</em\s*>|<span\b[^>]*font-style\s*:\s*italic[^>]*>(.*?)</span\s*>",
+    )
+    .unwrap()
+});
+static RE_EM_RULE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)<hr\b[^>]*>").unwrap());
+
 /// e-Sword classic RTF Hebrew font bytes (consonants 0xE0+ and niqqud 0xC0+).
 fn esword_hebrew_byte(b: u8) -> Option<char> {
     match b {
@@ -411,6 +443,98 @@ fn repair_codepage_mojibake(text: String) -> String {
 /// Limpia HTML/RTF de texto e-Sword (incl. Vine AT RTF y HTML moderno).
 /// Preserva las palabras de Jesús como marcadores WOC_OPEN…WOC_CLOSE.
 pub fn clean_text(raw: &str) -> String {
+    clean_impl(raw, None)
+}
+
+/// `clean_text`, with the bold and italic runs of the markup left in as EM_* markers, and a line
+/// break at headings and horizontal rules (which `clean_text` glues to the next line:
+/// «BDB-THAYERἈγρίππας»). Only the study panels use it, through `sections.rs` — never Bible
+/// text, where breaking at the headings two Bibles carry inside verses would move word positions.
+pub(crate) fn clean_text_emphasis(raw: &str, sigs: &mut Vec<String>) -> String {
+    clean_impl(raw, Some(sigs))
+}
+
+/// The markup that opened a bold run: the opening tags right before it (nothing visible in
+/// between) plus its own, lowercased with whitespace folded. «Diccionario Strong» in the
+/// Multiléxico: `<p style="text-align:center;"><span style="color:#008080;font-weight:bold;">`.
+fn emphasis_signature(before: &str, own: &str) -> String {
+    let mut rest = before.trim_end();
+    let mut tags: Vec<&str> = Vec::new();
+    while tags.len() < 4 && rest.ends_with('>') {
+        let Some(lt) = rest.rfind('<') else { break };
+        let tag = &rest[lt..];
+        let name = tag[1..].trim_start().to_ascii_lowercase();
+        let closes_or_breaks = name.starts_with('/')
+            || name.starts_with('!')
+            || name.starts_with("br")
+            || name.starts_with("hr");
+        if closes_or_breaks {
+            break;
+        }
+        tags.push(tag);
+        rest = rest[..lt].trim_end();
+    }
+    let mut sig = String::new();
+    for tag in tags.iter().rev().copied().chain(std::iter::once(own)) {
+        let mut space = false;
+        for c in tag.chars() {
+            if c.is_whitespace() {
+                space = true;
+                continue;
+            }
+            if space && !sig.ends_with('<') {
+                sig.push(' ');
+            }
+            space = false;
+            sig.push(if c == '\'' { '"' } else { c.to_ascii_lowercase() });
+        }
+    }
+    sig
+}
+
+fn mark_emphasis(text: &str, sigs: &mut Vec<String>) -> String {
+    let bold = RE_EM_BOLD.replace_all(text, |caps: &regex::Captures| {
+        let whole = caps.get(0).expect("match");
+        let open_len = whole.as_str().find('>').map_or(0, |i| i + 1);
+        let own = &whole.as_str()[..open_len];
+        let sig = emphasis_signature(&text[..whole.start()], own);
+        let n = match sigs.iter().position(|s| *s == sig) {
+            Some(n) => n,
+            None => {
+                sigs.push(sig);
+                sigs.len() - 1
+            }
+        };
+        let sig_char = char::from_u32((EM_SIG_BASE + n as u32).min(EM_SIG_LAST)).unwrap_or(EM_BOLD_OPEN);
+        let inner = (1..=4).find_map(|g| caps.get(g)).map_or("", |m| m.as_str());
+        let heading = own.len() > 2 && own.as_bytes()[2].is_ascii_digit();
+        let mut s = String::with_capacity(inner.len() + 12);
+        if heading {
+            s.push('\n');
+        }
+        s.push(EM_BOLD_OPEN);
+        s.push(sig_char);
+        s.push_str(inner);
+        s.push(EM_BOLD_CLOSE);
+        if heading {
+            s.push('\n');
+        }
+        s
+    });
+    let italic = RE_EM_ITALIC.replace_all(&bold, |caps: &regex::Captures| {
+        let inner = (1..=3).find_map(|g| caps.get(g)).map_or("", |m| m.as_str());
+        format!("{EM_ITALIC_OPEN}{inner}{EM_ITALIC_CLOSE}")
+    });
+    RE_EM_RULE.replace_all(&italic, "\n").into_owned()
+}
+
+/// `collapse_whitespace` + trim: the whitespace pass of `finish`, for text rebuilt from
+/// `clean_text_emphasis` lines.
+pub(crate) fn tidy_whitespace(s: &str) -> String {
+    collapse_whitespace(s).trim().to_string()
+}
+
+fn clean_impl(raw: &str, emphasis: Option<&mut Vec<String>>) -> String {
     let shape = Shape::of(raw);
 
     // Plain prose (most Bible verses) skips every markup stage.
@@ -435,6 +559,10 @@ pub fn clean_text(raw: &str) -> String {
                 format!("{WOC_OPEN}{inner}{WOC_CLOSE}")
             })
             .into_owned();
+
+        if let Some(sigs) = emphasis {
+            text = mark_emphasis(&text, sigs);
+        }
 
         // Preserve Strong’s codes from <num>H2691</num> before tag strip
         text = RE_NUM_TAG

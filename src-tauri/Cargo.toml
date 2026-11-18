@@ -55,8 +55,13 @@ opt-level = 3
 lto = "fat"
 # Single codegen unit → better optimization (slower compile)
 codegen-units = 1
-# Smaller binary, no unwind tables
-panic = "abort"
+# NOTE: intentionally NOT panic = "abort".
+# probe_modules_content() wraps every module read in catch_unwind so one corrupt
+# / hostile e-Sword file can't take the app down. catch_unwind is a no-op under
+# panic = "abort" — the process just dies — so the safety net only exists with
+# unwinding on. Costs a little binary size; buys crash resistance against the
+# third-party module files this app reads.
+panic = "unwind"
 # Strip symbols from the final binary (less disk + RAM for mappings)
 strip = "symbols"
 # No debuginfo in ship builds

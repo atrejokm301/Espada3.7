@@ -3,7 +3,7 @@
 .SYNOPSIS
   Optimized Windows release build for Espada 3.7 (Tauri).
 
-  Profile: -O3, fat LTO, strip, panic=abort, native CPU, single codegen unit.
+  Profile: -O3, fat LTO, strip, panic=unwind, native CPU, single codegen unit.
   Output:  installer(s) + release .exe under src-tauri\target\release\
 #>
 $ErrorActionPreference = "Stop"
@@ -17,7 +17,7 @@ $Ui = Join-Path $Root "ui"
 Write-Host ""
 Write-Host "  Espada 3.7 (Windows) — RELEASE BUILD" -ForegroundColor Cyan
 Write-Host "  =====================================" -ForegroundColor Cyan
-Write-Host "  opt-level=3  LTO=fat  codegen-units=1  strip  panic=abort" -ForegroundColor DarkGray
+Write-Host "  opt-level=3  LTO=fat  codegen-units=1  strip  panic=unwind" -ForegroundColor DarkGray
 Write-Host "  RUSTFLAGS: target-cpu=native (+ embed-bitcode)" -ForegroundColor DarkGray
 Write-Host "  UI: $Ui" -ForegroundColor DarkGray
 Write-Host ""
@@ -42,7 +42,11 @@ $env:CARGO_PROFILE_RELEASE_OPT_LEVEL = "3"
 $env:CARGO_PROFILE_RELEASE_LTO = "fat"
 $env:CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "1"
 $env:CARGO_PROFILE_RELEASE_STRIP = "symbols"
-$env:CARGO_PROFILE_RELEASE_PANIC = "abort"
+# MUST stay "unwind" and match Cargo.toml: probe_modules_content() relies on
+# catch_unwind so one corrupt e-Sword module can't kill the app, and
+# catch_unwind is a no-op under panic=abort. This env var silently overrides
+# Cargo.toml, so setting "abort" here would quietly disable that safety net.
+$env:CARGO_PROFILE_RELEASE_PANIC = "unwind"
 $env:CARGO_PROFILE_RELEASE_DEBUG = "0"
 $env:CARGO_PROFILE_RELEASE_INCREMENTAL = "false"
 
