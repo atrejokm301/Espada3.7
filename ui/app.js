@@ -1484,8 +1484,6 @@
       if (b) state.bible = b;
     }
     fillChapterSelect();
-    var chSel = el("sel-chapter");
-    if (chSel) chSel.value = String(state.chapter);
     syncHeaderPills();
     // Switch to Biblia tab
     goToStudyTab("biblia");
@@ -2217,8 +2215,6 @@
               state.selectedWordIndex = -1;
               state.highlightMode = "verse";
               fillChapterSelect();
-              var chSel = el("sel-chapter");
-              if (chSel) chSel.value = String(chapter);
               syncHeaderPills();
               goToStudyTab("biblia");
               loadChapter();
@@ -3563,18 +3559,140 @@
     }, 80);
   }
 
-  function fillChapterSelect() {
-    var max = bookMeta().chapters || 1;
-    var sel = el("sel-chapter");
-    if (!sel) return;
-    sel.innerHTML = "";
-    for (var c = 1; c <= max; c++) {
-      var o = document.createElement("option");
-      o.value = String(c);
-      o.textContent = String(c);
-      sel.appendChild(o);
+  /* ---------- Header navigation: Libro · capítulo · Versículo · Biblia ---------- */
+  // One popover family. Each menu is a .pill-dd root holding its button and its panel, so the
+  // outside-click closers (here and in the mini loader) read a click inside as "stay open".
+  // A click never re-renders the node it lands on (steps switch with `hidden`): a detached
+  // target fails that closest(".pill-dd") test and the menu would close under the click.
+
+  var BOOK_COLUMNS = 3; // per testament; books run down each column, Génesis to Apocalipsis
+  var RECENT_BIBLES_KEY = "adc-bible-recent-bibles-v1";
+  var RECENT_BIBLES_MAX = 5;
+  var NAV_ICONS = {
+    left: '<path d="m15 18-6-6 6-6"/>',
+    go: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>'
+  };
+  var navUi = {
+    wired: false,
+    bookBuiltFor: null, // state.books the book panel was built from
+    pendingBook: 0, // book whose chapters the book panel shows
+    ref: null, // passage typed in the book search («Jn 3:16»)
+    bibleBuiltFor: null, // state.bibles the rows were built from (built on first open)
+    bibleRows: [], // { b, node, hay } in module order
+    twins: {}, // abbreviation|title → how many files share it
+    activeRows: [],
+    shown: [], // visible rows in order (Recientes first) for the arrow keys
+    kb: -1,
+    kbNode: null,
+    digits: "",
+    digitsTimer: null
+  };
+
+  function navIcon(name) {
+    return '<svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true">' + NAV_ICONS[name] + "</svg>";
+  }
+
+  function bookByNumber(n) {
+    var books = state.books || [];
+    for (var i = 0; i < books.length; i++) {
+      if (books[i].number === n) return books[i];
     }
-    sel.value = String(state.chapter);
+    return null;
+  }
+
+  function rangeList(n) {
+    var out = [];
+    for (var i = 1; i <= n; i++) out.push(i);
+    return out;
+  }
+
+  /** Name kept from the old <select>: every jump calls it. Now it only syncs the capsule. */
+  function fillChapterSelect() {
+    syncChapterPill();
+  }
+
+  function syncChapterPill() {
+    var bm = bookMeta();
+    var max = bm.chapters || 1;
+    var text = el("pill-chapter-text");
+    if (text) text.textContent = String(state.chapter);
+    var btn = el("pill-chapter-btn");
+    if (btn) btn.title = "Capítulo " + state.chapter + " de " + max;
+    var before = state.chapter > 1 ? null : bookByNumber(state.bookNumber - 1);
+    var after = state.chapter < max ? null : bookByNumber(state.bookNumber + 1);
+    var prev = el("btn-prev");
+    if (prev) {
+      prev.disabled = state.chapter <= 1 && !before;
+      prev.title = state.chapter > 1
+        ? "Capítulo anterior · " + bm.name + " " + (state.chapter - 1)
+        : before ? "Libro anterior · " + before.name + " " + (before.chapters || 1) : "Capítulo anterior";
+    }
+    var next = el("btn-next");
+    if (next) {
+      next.disabled = state.chapter >= max && !after;
+      next.title = state.chapter < max
+        ? "Capítulo siguiente · " + bm.name + " " + (state.chapter + 1)
+        : after ? "Libro siguiente · " + after.name + " 1" : "Capítulo siguiente";
+    }
+  }
+
+  /** ‹ › step one chapter, crossing into the previous / next book at the ends. */
+  function stepChapter(delta) {
+    var bm = bookMeta();
+    var bn = state.bookNumber;
+    var ch = state.chapter + delta;
+    if (ch < 1) {
+      var before = bookByNumber(bn - 1);
+      if (!before) return;
+      bn = before.number;
+      ch = before.chapters || 1;
+    } else if (ch > (bm.chapters || 1)) {
+      var after = bookByNumber(bn + 1);
+      if (!after) return;
+      bn = after.number;
+      ch = 1;
+    }
+    closeAllPillDropdowns();
+    state.bookNumber = bn;
+    state.chapter = ch;
+    state.selectedVerse = null;
+    state.selectedWord = null;
+    syncBookPill();
+    markActiveBook();
+    loadChapter();
+  }
+
+  /** Go to a passage from the menus; verse is optional (then the chapter opens at its top). */
+  function navigateTo(bookNumber, chapter, verse) {
+    closeAllPillDropdowns();
+    if (!bookByNumber(bookNumber) || !chapter) return;
+    if (state.bookNumber === bookNumber && state.chapter === chapter) {
+      if (verse != null) selectVerse(verse, true);
+      return;
+    }
+    state.bookNumber = bookNumber;
+    state.chapter = chapter;
+    state.selectedVerse = verse != null ? verse : null;
+    state.selectedWord = null;
+    state.pendingScroll = null;
+    if (verse != null) {
+      state.selectedWordIndex = -1;
+      state.highlightMode = "verse";
+      state.pendingScroll = { book: bookNumber, chapter: chapter, verse: verse };
+    }
+    syncBookPill();
+    markActiveBook();
+    loadChapter();
+  }
+
+  /** After a jump to «Libro c:v», bring that verse into view once its chapter is painted. */
+  function applyPendingScroll(bookNumber, chapter) {
+    var p = state.pendingScroll;
+    if (!p) return;
+    state.pendingScroll = null;
+    if (p.book !== bookNumber || p.chapter !== chapter) return;
+    var node = document.querySelector('.verse[data-verse="' + p.verse + '"]');
+    if (node) node.scrollIntoView({ block: "center" });
   }
 
   function closeAllPillDropdowns() {
@@ -3586,6 +3704,7 @@
       if (btn) btn.setAttribute("aria-expanded", "false");
       if (panel) panel.hidden = true;
     }
+    navUi.digits = "";
   }
 
   function togglePillDropdown(id) {
@@ -3594,24 +3713,68 @@
     var wasOpen = root.classList.contains("open");
     closeAllPillDropdowns();
     if (wasOpen) return;
-    // Rebuild list when opening so active mark is correct after a silent switch
-    if (id === "pill-bible") {
-      try { fillBiblePill(); } catch (e) { console.warn(e); }
-    } else if (id === "pill-book") {
-      try { fillBookPill(); } catch (e) { console.warn(e); }
-    }
+    var focusTarget = null;
+    try {
+      if (id === "pill-book") focusTarget = prepareBookPanel();
+      else if (id === "pill-chapter") focusTarget = prepareChapterPanel();
+      else if (id === "pill-verse") focusTarget = prepareVersePanel();
+      else if (id === "pill-bible") focusTarget = prepareBiblePanel();
+    } catch (e) { console.warn(e); }
     root.classList.add("open");
     var btn = root.querySelector(".pill-dd-btn");
     var panel = root.querySelector(".pill-dd-panel");
     if (btn) btn.setAttribute("aria-expanded", "true");
-    if (panel) {
-      panel.hidden = false;
-      // Scroll active item into view
-      var active = panel.querySelector(".pill-dd-item.active");
-      if (active && active.scrollIntoView) {
-        try { active.scrollIntoView({ block: "nearest" }); } catch (e) {}
-      }
+    if (!panel) return;
+    panel.hidden = false;
+    placePopover(root, panel, id === "pill-book");
+    var cur = panel.querySelector(".num.cur");
+    if (cur) scrollIntoPanel(cur, true);
+    if (focusTarget) {
+      try { focusTarget.focus({ preventScroll: true }); } catch (e) {}
     }
+  }
+
+  /**
+   * Keep a popover inside the window: cap its height to the room below, then shift it sideways.
+   * fitWidth fixes the width the full list needs (the book menu), so typing in its search never
+   * makes it jump narrower. Height goes first: a scrollbar it adds or removes changes the width.
+   */
+  function placePopover(root, panel, fitWidth) {
+    panel.style.left = "";
+    panel.style.right = "";
+    var margin = 12;
+    // offset* metrics: the panel's own box without the pop-in transform (a bounding rect taken
+    // now would be scaled and lifted a few pixels). The root is the panel's offsetParent.
+    var at = root.getBoundingClientRect();
+    var room = window.innerHeight - (at.top + panel.offsetTop) - margin;
+    panel.style.maxHeight = Math.max(200, Math.min(760, Math.floor(room))) + "px";
+    if (fitWidth) {
+      panel.style.width = "";
+      panel.style.width = panel.offsetWidth + "px";
+    }
+    var vw = document.documentElement.clientWidth || window.innerWidth;
+    var left = at.left + panel.offsetLeft;
+    var shift = 0;
+    if (left + panel.offsetWidth > vw - margin) shift = vw - margin - (left + panel.offsetWidth);
+    if (left + shift < margin) shift = margin - left;
+    if (shift) {
+      panel.style.right = "auto";
+      panel.style.left = Math.round(panel.offsetLeft + shift) + "px";
+    }
+  }
+
+  /** Scroll a row or cell into view inside its own popover only (never the page). */
+  function scrollIntoPanel(node, center) {
+    var box = node.closest ? node.closest(".pop-body") : null;
+    if (!box) return;
+    var top = node.offsetTop; // .pop-body is position:relative
+    var h = node.offsetHeight;
+    if (center) {
+      box.scrollTop = Math.max(0, top - (box.clientHeight - h) / 2);
+      return;
+    }
+    if (top < box.scrollTop) box.scrollTop = Math.max(0, top - 6);
+    else if (top + h > box.scrollTop + box.clientHeight) box.scrollTop = top + h - box.clientHeight + 6;
   }
 
   /** Full book name on the pill (custom control — not native select). */
@@ -3634,98 +3797,737 @@
     if (btn) btn.title = bibleFullName(b) || label;
   }
 
+  /* ----- Libro: Antiguo / Nuevo Testamento, then that book's chapters ----- */
+
   function fillBookPill() {
-    var panel = el("pill-book-panel");
-    if (!panel) return;
-    panel.innerHTML = "";
+    buildBookPanel();
+    markActiveBook();
+    syncBookPill();
+  }
+
+  function buildBookPanel() {
+    var host = el("pill-book-list");
+    if (!host) return;
+    var books = state.books || [];
+    if (navUi.bookBuiltFor === books && el("bk-step-books")) return;
+    navUi.bookBuiltFor = books;
+    // Kevin wants the books as a Bible lists them: canonical order, no genre groups.
+    var parts = [["AT", "Antiguo Testamento"], ["NT", "Nuevo Testamento"]];
+    var sorted = books.slice().sort(function (a, b) { return a.number - b.number; });
+    var html = '<button type="button" class="bk-goto" id="bk-goto" hidden></button>' +
+      '<div class="bk-cols" id="bk-step-books">';
+    for (var p = 0; p < parts.length; p++) {
+      var items = "";
+      var count = 0;
+      for (var i = 0; i < sorted.length; i++) {
+        var b = sorted[i];
+        var t = b.testament === "AT" || b.testament === "NT" ? b.testament : (b.number <= 39 ? "AT" : "NT");
+        if (t !== parts[p][0]) continue;
+        count++;
+        var chs = b.chapters || 1;
+        items += '<button type="button" class="bk-item" data-book="' + b.number + '" title="' +
+          escapeHtml(b.name + " · " + chs + (chs === 1 ? " capítulo" : " capítulos")) + '">' +
+          escapeHtml(b.name) + "</button>";
+      }
+      html += '<section class="bk-testament" data-t="' + parts[p][0] + '"><h4 class="bk-th">' + parts[p][1] +
+        '<span class="bk-n">' + count + " libros</span></h4>" +
+        '<div class="bk-grid" style="--rows:' + Math.max(1, Math.ceil(count / BOOK_COLUMNS)) + '">' + items +
+        "</div></section>";
+    }
+    html += "</div>" +
+      '<div class="bk-chapters" id="bk-step-chapters" hidden>' +
+        '<div class="bk-step-head"><button type="button" class="bk-back" id="bk-back">' + navIcon("left") +
+          'Libros</button><span class="bk-step-title" id="bk-ch-title"></span>' +
+          '<span class="bk-step-sub" id="bk-ch-sub"></span></div>' +
+        '<div class="num-grid" id="bk-ch-grid"></div>' +
+      "</div>" +
+      '<div class="bk-empty" id="bk-empty" hidden></div>';
+    host.innerHTML = html;
+    var head = el("book-head");
+    if (head) head.hidden = false;
+  }
+
+  function markActiveBook() {
+    var host = el("pill-book-list");
+    if (!host) return;
+    var old = host.querySelectorAll(".bk-item.active");
+    for (var i = 0; i < old.length; i++) old[i].classList.remove("active");
+    var cur = host.querySelector('.bk-item[data-book="' + state.bookNumber + '"]');
+    if (cur) cur.classList.add("active");
+  }
+
+  function prepareBookPanel() {
+    buildBookPanel();
+    markActiveBook();
+    var input = el("book-search");
+    if (input) input.value = "";
+    showBookStep("books");
+    return input;
+  }
+
+  function showBookStep(step) {
+    var chapters = step === "chapters";
+    var books = el("bk-step-books");
+    var chs = el("bk-step-chapters");
+    var head = el("book-head");
+    if (books) books.hidden = chapters;
+    if (chs) chs.hidden = !chapters;
+    if (head && el("bk-step-books")) head.hidden = chapters;
+    if (chapters) {
+      var go = el("bk-goto");
+      var empty = el("bk-empty");
+      if (go) go.hidden = true;
+      if (empty) empty.hidden = true;
+    } else {
+      filterBooks(el("book-search") ? el("book-search").value : "");
+    }
+    var body = el("pill-book-list");
+    if (body) body.scrollTop = 0;
+  }
+
+  /** A book picked in the menu: one-chapter books open at once, the rest show their chapters. */
+  function chooseBook(n) {
+    var b = bookByNumber(n);
+    if (!b) return;
+    var chs = b.chapters || 1;
+    if (chs <= 1) {
+      navigateTo(n, 1, null);
+      return;
+    }
+    navUi.pendingBook = n;
+    navUi.digits = "";
+    el("bk-ch-title").textContent = b.name;
+    var sub = el("bk-ch-sub");
+    var idle = chs + " capítulos · escribe el número";
+    sub.textContent = idle;
+    sub.setAttribute("data-idle", idle);
+    sub.classList.remove("typing");
+    var grid = el("bk-ch-grid");
+    fillNumberGrid(grid, rangeList(chs), n === state.bookNumber ? state.chapter : 0, 12);
+    showBookStep("chapters");
+    var target = grid.querySelector(".num.cur") || grid.querySelector(".num");
+    if (target) {
+      scrollIntoPanel(target, true);
+      try { target.focus({ preventScroll: true }); } catch (e) {}
+    }
+  }
+
+  function bookMatches(b, key, aliasHit) {
+    if (!key) return true;
+    if (aliasHit === b.number) return true;
+    var name = tightKey(b.name);
+    return name.indexOf(key) === 0 ||
+      name.replace(/^[1-3]/, "").indexOf(key) === 0 ||
+      tightKey(b.abbr || "") === key;
+  }
+
+  /** Dictation spells it out: «Proverbios capítulo 3 versículo 5» → «Proverbios 3 5». */
+  function cleanRefText(q) {
+    return String(q || "")
+      .replace(/(^|\s)(?:cap[ií]tulos?|cap|vers[ií]culos?|vers|vv?)\.?(?=\s|\d|$)/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /** Edits that turn `a` into the closest START of `b`, so a mistyped beginning still counts. */
+  function prefixEditDistance(a, b) {
+    var prev = [];
+    var j;
+    for (j = 0; j <= b.length; j++) prev[j] = j;
+    for (var i = 1; i <= a.length; i++) {
+      var cur = [i];
+      for (j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+      prev = cur;
+    }
+    return Math.min.apply(null, prev);
+  }
+
+  /**
+   * A typo or dictation slip («Powerbios», «Proberbios», «Apocalipsys», «1 corintos»): the book
+   * within one edit (two from 8 letters on). Only a clear winner counts: a tie gives nothing.
+   */
+  function fuzzyBook(part) {
+    var key = tightKey(part);
+    if (key.length < 4) return null;
+    var allowed = key.length >= 8 ? 2 : 1;
+    var best = null;
+    var bestD = allowed + 1;
+    var tie = false;
     var books = state.books || [];
     for (var i = 0; i < books.length; i++) {
-      (function (b) {
-        var item = document.createElement("button");
-        item.type = "button";
-        item.className = "pill-dd-item" +
-          (b.number === state.bookNumber ? " active" : "");
-        item.setAttribute("role", "option");
-        item.textContent = b.name;
-        item.onclick = function () {
-          closeAllPillDropdowns();
-          if (state.bookNumber === b.number) return;
-          state.bookNumber = b.number;
-          state.chapter = 1;
-          state.selectedVerse = null;
-          state.selectedWord = null;
-          syncBookPill();
-          fillBookPill(); // refresh active mark
-          fillChapterSelect();
-          loadChapter();
-        };
-        panel.appendChild(item);
-      })(books[i]);
+      var name = tightKey(books[i].name);
+      var d = Math.min(prefixEditDistance(key, name), prefixEditDistance(key, name.replace(/^[1-3]/, "")));
+      if (d < bestD) {
+        bestD = d;
+        best = books[i].number;
+        tie = false;
+      } else if (d === bestD) {
+        tie = true;
+      }
     }
-    syncBookPill();
+    return best && !tie ? best : null;
+  }
+
+  /** «Jn 3:16», «1 co 13», «Sal 23», «Judas 5» (one-chapter book → verse) → passage, else null. */
+  function parseNavRef(q) {
+    var m = /^\s*((?:[1-3]\s*)?[^\d\s:.,][^\d:]*?)\s*\.?\s*(\d{1,3})(?:\s*[:.,\s]\s*(\d{1,3}))?\s*$/.exec(cleanRefText(q));
+    if (!m) return null;
+    var bn = resolveBookAlias(m[1]);
+    if (!bn) {
+      var key = tightKey(m[1]);
+      var hits = (state.books || []).filter(function (b) { return bookMatches(b, key, null); });
+      if (hits.length === 1) bn = hits[0].number;
+      else if (!hits.length) bn = fuzzyBook(m[1]);
+    }
+    var b = bn ? bookByNumber(bn) : null;
+    if (!b) return null;
+    var chs = b.chapters || 1;
+    var ch = parseInt(m[2], 10);
+    var v = m[3] ? parseInt(m[3], 10) : null;
+    if (chs === 1 && v == null && ch > 1) {
+      v = ch;
+      ch = 1;
+    }
+    if (!ch || ch > chs || v === 0) return null;
+    return { bookNumber: b.number, chapter: ch, verse: v, label: b.name + " " + ch + (v ? ":" + v : "") };
+  }
+
+  function filterBooks(q) {
+    var host = el("pill-book-list");
+    if (!host || !el("bk-step-books")) return;
+    var raw = String(q || "").trim();
+    var ref = raw ? parseNavRef(raw) : null;
+    navUi.ref = ref;
+    // «ro 8» filters on «ro»; a lone «1» still lists 1 Samuel, 1 Reyes…
+    var text = cleanRefText(raw);
+    var tail = /^(.*[^\d\s:.,])\s*\d+(?:\s*[:.,\s]\s*\d+)?\s*$/.exec(text);
+    var bookPart = tail ? tail[1] : text;
+    var key = tightKey(bookPart);
+    var aliasHit = key ? resolveBookAlias(bookPart) : null;
+    var books = state.books || [];
+    var fuzzyHit = null;
+    if (key && !aliasHit && !ref) {
+      // Nothing starts like that: try the nearest name («powerbios» → Proverbios).
+      var anyHit = false;
+      for (var k = 0; k < books.length && !anyHit; k++) anyHit = bookMatches(books[k], key, null);
+      if (!anyHit) fuzzyHit = fuzzyBook(bookPart);
+    }
+    var items = host.querySelectorAll(".bk-item");
+    var shown = 0;
+    for (var i = 0; i < items.length; i++) {
+      var b = bookByNumber(parseInt(items[i].getAttribute("data-book"), 10));
+      var ok = !!b && (bookMatches(b, key, aliasHit) || (ref && ref.bookNumber === b.number) ||
+        fuzzyHit === b.number);
+      items[i].hidden = !ok;
+      if (ok) shown++;
+    }
+    // Keep each testament reading down its columns while filtered (rows = ⌈visible / 3⌉).
+    var secs = host.querySelectorAll(".bk-testament");
+    for (var j = 0; j < secs.length; j++) {
+      var visible = secs[j].querySelectorAll(".bk-item:not([hidden])").length;
+      secs[j].hidden = !visible;
+      var grid = secs[j].querySelector(".bk-grid");
+      if (grid) grid.style.setProperty("--rows", String(Math.max(1, Math.ceil(visible / BOOK_COLUMNS))));
+    }
+    var go = el("bk-goto");
+    if (go) {
+      go.hidden = !ref;
+      if (ref) {
+        go.innerHTML = navIcon("go") + "<span>Ir a " + escapeHtml(ref.label) + '</span><kbd class="pop-kbd">Enter</kbd>';
+      }
+    }
+    var empty = el("bk-empty");
+    if (empty) {
+      empty.hidden = shown > 0;
+      if (!shown) empty.textContent = "Ningún libro coincide con «" + raw + "»";
+    }
+  }
+
+  /* ----- Capítulo / Versículo: number grids you can also type into ----- */
+
+  function fillNumberGrid(grid, nums, current, maxCols) {
+    var cols = Math.max(1, Math.min(nums.length, maxCols));
+    grid.style.setProperty("--cols", String(cols));
+    grid.setAttribute("data-cols", String(cols));
+    var html = "";
+    for (var i = 0; i < nums.length; i++) {
+      html += '<button type="button" class="num' + (nums[i] === current ? " cur" : "") +
+        '" data-n="' + nums[i] + '">' + nums[i] + "</button>";
+    }
+    grid.innerHTML = html;
+  }
+
+  function prepareChapterPanel() {
+    var panel = el("pill-chapter-panel");
+    if (!panel) return null;
+    var bm = bookMeta();
+    var max = bm.chapters || 1;
+    var idle = max + (max === 1 ? " capítulo" : " capítulos") + " · escribe el número";
+    panel.innerHTML = '<div class="pop-title"><b>' + escapeHtml(bm.name) + "</b>" +
+      '<span class="pop-hint" data-idle="' + escapeHtml(idle) + '">' + escapeHtml(idle) + "</span></div>" +
+      '<div class="pop-body"><div class="num-grid"></div></div>';
+    var grid = panel.querySelector(".num-grid");
+    fillNumberGrid(grid, rangeList(max), state.chapter, 10);
+    return grid.querySelector(".num.cur") || grid.querySelector(".num");
+  }
+
+  function prepareVersePanel() {
+    var panel = el("pill-verse-panel");
+    if (!panel) return null;
+    var bm = bookMeta();
+    var nums = [];
+    for (var i = 0; i < state.verses.length; i++) nums.push(state.verses[i].verse);
+    var title = '<div class="pop-title"><b>' + escapeHtml(bm.name + " " + state.chapter) + "</b>";
+    if (!nums.length) {
+      panel.innerHTML = title + '<span class="pop-hint">Carga el capítulo primero.</span></div>';
+      return null;
+    }
+    var idle = nums.length + (nums.length === 1 ? " versículo" : " versículos") + " · escribe el número";
+    panel.innerHTML = title + '<span class="pop-hint" data-idle="' + escapeHtml(idle) + '">' + escapeHtml(idle) +
+      "</span></div>" + '<div class="pop-body"><div class="num-grid"></div></div>';
+    var grid = panel.querySelector(".num-grid");
+    fillNumberGrid(grid, nums, state.selectedVerse, 10);
+    return grid.querySelector(".num.cur") || grid.querySelector(".num");
+  }
+
+  function showTyped(hint, digits) {
+    if (!hint) return;
+    hint.textContent = digits ? "Ir al " + digits + " · Enter" : (hint.getAttribute("data-idle") || "");
+    hint.classList.toggle("typing", !!digits);
+  }
+
+  /** Typed digits jump to that number (Enter opens it); arrows move around the grid. */
+  function gridKeydown(ev, grid, hint) {
+    if (!grid || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    var cells = grid.querySelectorAll(".num");
+    if (!cells.length) return;
+    var k = ev.key;
+    var i;
+    if (/^[0-9]$/.test(k)) {
+      ev.preventDefault();
+      var want = (navUi.digits + k).replace(/^0+/, "");
+      var hit = null;
+      for (i = 0; i < cells.length && want; i++) {
+        if (cells[i].getAttribute("data-n") === want) { hit = cells[i]; break; }
+      }
+      if (!hit) {
+        // Past the end: start over from this digit («2» then «5» in a 16-chapter book → 5)
+        want = k === "0" ? "" : k;
+        for (i = 0; i < cells.length && want; i++) {
+          if (cells[i].getAttribute("data-n") === want) { hit = cells[i]; break; }
+        }
+      }
+      navUi.digits = hit ? want : "";
+      clearTimeout(navUi.digitsTimer);
+      navUi.digitsTimer = setTimeout(function () {
+        navUi.digits = "";
+        showTyped(hint, "");
+      }, 1600);
+      if (hit) {
+        scrollIntoPanel(hit, false);
+        try { hit.focus({ preventScroll: true }); } catch (e) {}
+      }
+      showTyped(hint, navUi.digits);
+      return;
+    }
+    var at = Array.prototype.indexOf.call(cells, document.activeElement);
+    var cols = parseInt(grid.getAttribute("data-cols"), 10) || 10;
+    var to;
+    if (k === "ArrowRight") to = at + 1;
+    else if (k === "ArrowLeft") to = at - 1;
+    else if (k === "ArrowDown") to = at < 0 ? 0 : at + cols;
+    else if (k === "ArrowUp") to = at - cols;
+    else if (k === "Home") to = 0;
+    else if (k === "End") to = cells.length - 1;
+    else return;
+    ev.preventDefault();
+    if (to < 0 || to >= cells.length) return;
+    scrollIntoPanel(cells[to], false);
+    try { cells[to].focus({ preventScroll: true }); } catch (e) {}
+  }
+
+  /* ----- Biblia: search well, Recientes, every module ----- */
+
+  function twinKey(b) {
+    return String(b.abbreviation || "").trim().toLowerCase() + "|" + String(b.title || "").trim().toLowerCase();
+  }
+
+  function bibleRowHtml(b, i, twin) {
+    var abbr = b.abbreviation || b.filename || "Biblia";
+    var title = String(b.title || "").trim();
+    if (!title || title.toLowerCase() === String(abbr).toLowerCase()) title = b.filename || "";
+    var tip = (bibleFullName(b) || abbr) + (b.filename ? " · " + b.filename : "");
+    // 632 of the 866 files share abbreviation + title with another one: their file tells them apart.
+    var file = twin && b.filename && title !== b.filename
+      ? '<span class="bb-file">' + escapeHtml(b.filename) + "</span>"
+      : "";
+    return '<button type="button" class="bb-row" role="option" aria-selected="false" data-i="' + i +
+      '" title="' + escapeHtml(tip) + '"><span class="bb-abbr">' + escapeHtml(abbr) + "</span>" +
+      '<span class="bb-desc"><span class="bb-title">' + escapeHtml(title) + "</span>" + file + "</span></button>";
+  }
+
+  function buildBibleRows() {
+    var host = el("pill-bible-list");
+    if (!host) return;
+    var list = state.bibles || [];
+    if (navUi.bibleBuiltFor === list && el("bb-all")) return;
+    navUi.bibleBuiltFor = list;
+    var twins = {};
+    var i;
+    for (i = 0; i < list.length; i++) {
+      var tk = twinKey(list[i]);
+      twins[tk] = (twins[tk] || 0) + 1;
+    }
+    var rows = "";
+    for (i = 0; i < list.length; i++) rows += bibleRowHtml(list[i], i, twins[twinKey(list[i])] > 1);
+    host.innerHTML =
+      '<div class="bb-section" id="bb-recent-sec" hidden><div class="bb-label">Recientes</div><div id="bb-recent"></div></div>' +
+      '<div class="bb-section"><div class="bb-label" id="bb-all-label"></div><div id="bb-all">' + rows + "</div></div>" +
+      '<div class="bb-empty" id="bb-empty" hidden></div>';
+    var nodes = el("bb-all").children;
+    navUi.bibleRows = [];
+    for (i = 0; i < list.length; i++) {
+      navUi.bibleRows.push({
+        b: list[i],
+        node: nodes[i],
+        hay: normKey([list[i].abbreviation, list[i].title, list[i].filename].join(" "))
+      });
+    }
+    navUi.twins = twins;
+    navUi.activeRows = [];
+    navUi.kbNode = null;
+    navUi.kb = -1;
+    var head = el("bible-head");
+    if (head) head.hidden = false;
+  }
+
+  function loadRecentBibles() {
+    var list = null;
+    try { list = JSON.parse(localStorage.getItem(RECENT_BIBLES_KEY) || "null"); } catch (e) { list = null; }
+    if (Array.isArray(list)) return list;
+    // First run: the reading history remembers which Bible each passage was read in.
+    list = [];
+    var hist = loadHistory();
+    for (var i = 0; i < hist.length && list.length < RECENT_BIBLES_MAX; i++) {
+      var p = hist[i] && hist[i].biblePath;
+      if (p && list.indexOf(p) < 0) list.push(p);
+    }
+    return list;
+  }
+
+  function rememberBible(path) {
+    if (!path) return;
+    var list = loadRecentBibles().filter(function (p) { return p !== path; });
+    list.unshift(path);
+    try { localStorage.setItem(RECENT_BIBLES_KEY, JSON.stringify(list.slice(0, RECENT_BIBLES_MAX))); } catch (e) {}
+  }
+
+  function renderRecentBibles() {
+    var box = el("bb-recent");
+    var sec = el("bb-recent-sec");
+    if (!box || !sec) return;
+    var cur = state.bible && state.bible.path;
+    var paths = loadRecentBibles().filter(function (p) { return p !== cur; });
+    if (cur) paths.unshift(cur);
+    var indexOf = {};
+    for (var i = 0; i < navUi.bibleRows.length; i++) indexOf[navUi.bibleRows[i].b.path] = i;
+    var html = "";
+    var n = 0;
+    for (var p = 0; p < paths.length && n < RECENT_BIBLES_MAX; p++) {
+      var ix = indexOf[paths[p]];
+      if (ix == null) continue;
+      var b = navUi.bibleRows[ix].b;
+      html += bibleRowHtml(b, ix, (navUi.twins[twinKey(b)] || 0) > 1);
+      n++;
+    }
+    box.innerHTML = html;
+    sec.hidden = !n;
+  }
+
+  function markActiveBible() {
+    for (var i = 0; i < navUi.activeRows.length; i++) {
+      navUi.activeRows[i].classList.remove("active");
+      navUi.activeRows[i].setAttribute("aria-selected", "false");
+    }
+    navUi.activeRows = [];
+    var cur = state.bible && state.bible.path;
+    var host = el("pill-bible-list");
+    if (!cur || !host) return;
+    var ix = -1;
+    for (var j = 0; j < navUi.bibleRows.length; j++) {
+      if (navUi.bibleRows[j].b.path === cur) { ix = j; break; }
+    }
+    if (ix < 0) return;
+    var nodes = host.querySelectorAll('.bb-row[data-i="' + ix + '"]');
+    for (var k = 0; k < nodes.length; k++) {
+      nodes[k].classList.add("active");
+      nodes[k].setAttribute("aria-selected", "true");
+      navUi.activeRows.push(nodes[k]);
+    }
+  }
+
+  /** Every typed word must appear in the abbreviation, title or file name (accents ignored). */
+  function filterBibles(q) {
+    var tokens = normKey(q).split(" ").filter(Boolean);
+    var rows = navUi.bibleRows;
+    var hits = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var ok = true;
+      for (var t = 0; t < tokens.length; t++) {
+        if (r.hay.indexOf(tokens[t]) < 0) { ok = false; break; }
+      }
+      if (r.node.hidden === ok) r.node.hidden = !ok;
+      if (ok) hits.push(r.node);
+    }
+    var searching = tokens.length > 0;
+    var sec = el("bb-recent-sec");
+    var box = el("bb-recent");
+    var recent = [];
+    if (sec && box) {
+      sec.hidden = searching || !box.children.length;
+      if (!sec.hidden) recent = Array.prototype.slice.call(box.children);
+    }
+    navUi.shown = recent.concat(hits);
+    var label = el("bb-all-label");
+    if (label) {
+      label.innerHTML = searching
+        ? hits.length + (hits.length === 1 ? " resultado" : " resultados")
+        : 'Todas las Biblias <span class="bb-n">' + rows.length + "</span>";
+      label.hidden = searching && !hits.length;
+    }
+    var empty = el("bb-empty");
+    if (empty) {
+      empty.hidden = !searching || hits.length > 0;
+      if (!empty.hidden) empty.textContent = "Ninguna Biblia coincide con «" + String(q).trim() + "»";
+    }
+    var clear = el("bible-search-clear");
+    if (clear) clear.hidden = !searching;
+    // While searching, the first result is ready for Enter (like a command palette).
+    setBibleKb(searching && hits.length ? recent.length : -1, false);
+  }
+
+  function setBibleKb(i, scroll) {
+    if (navUi.kbNode) navUi.kbNode.classList.remove("kb");
+    navUi.kbNode = null;
+    navUi.kb = -1;
+    var node = navUi.shown[i];
+    if (!node) return;
+    navUi.kb = i;
+    navUi.kbNode = node;
+    node.classList.add("kb");
+    if (scroll) scrollIntoPanel(node, false);
+  }
+
+  function moveBibleKb(delta) {
+    var n = navUi.shown.length;
+    if (!n) return;
+    var i = navUi.kb < 0 ? (delta > 0 ? 0 : n - 1) : Math.max(0, Math.min(n - 1, navUi.kb + delta));
+    setBibleKb(i, true);
+  }
+
+  function prepareBiblePanel() {
+    buildBibleRows();
+    renderRecentBibles();
+    markActiveBible();
+    var input = el("bible-search");
+    if (input) {
+      input.value = "";
+      input.placeholder = "Buscar entre " + navUi.bibleRows.length + " Biblias…";
+    }
+    filterBibles("");
+    var body = el("pill-bible-list");
+    if (body) body.scrollTop = 0;
+    return input;
+  }
+
+  function pickBible(b) {
+    try {
+      closeAllPillDropdowns();
+      if (state.bible && state.bible.path === b.path) return;
+      state.bible = b;
+      rememberBible(b.path);
+      syncBiblePill();
+      // Don't rebuild the whole list mid-click (can freeze WebView2); the marks refresh on open.
+      if (state.parallelPaths[0] === b.path) state.parallelPaths[0] = "";
+      if (state.parallelPaths[1] === b.path) state.parallelPaths[1] = "";
+      saveParallelPrefs();
+      try { fillParallelSelects(); } catch (pe) { console.warn(pe); }
+      loadChapter();
+    } catch (err) {
+      console.error("bible switch failed", err);
+      var errBox = el("chapter-error");
+      if (errBox) {
+        errBox.style.display = "block";
+        errBox.textContent = "Error al cambiar Biblia: " + (err.message || err);
+      }
+    }
   }
 
   function fillBiblePill() {
-    var panel = el("pill-bible-panel");
-    if (!panel) return;
-    panel.innerHTML = "";
-    var list = state.bibles || [];
-    var curPath = state.bible && state.bible.path;
-    // DocumentFragment: one DOM insert instead of 50+ reflows (smoother under glass)
-    var frag = document.createDocumentFragment();
-    for (var i = 0; i < list.length; i++) {
-      (function (b) {
-        var item = document.createElement("button");
-        item.type = "button";
-        item.className = "pill-dd-item" + (curPath && b.path === curPath ? " active" : "");
-        item.setAttribute("role", "option");
-        var abbr = b.abbreviation || b.filename || "Biblia";
-        var full = (b.title || "").trim();
-        var main = document.createElement("span");
-        main.textContent = abbr;
-        item.appendChild(main);
-        if (full && full.toLowerCase() !== String(abbr).toLowerCase()) {
-          var sub = document.createElement("span");
-          sub.className = "pdd-sub";
-          sub.textContent = full;
-          item.appendChild(sub);
-        }
-        item.title = bibleFullName(b) || abbr;
-        item.onclick = function () {
-          try {
-            closeAllPillDropdowns();
-            if (state.bible && state.bible.path === b.path) return;
-            state.bible = b;
-            syncBiblePill();
-            // Don't rebuild the whole 50+ item list mid-click (can freeze WebView2);
-            // refresh active mark the next time the menu opens via togglePillDropdown.
-            if (state.parallelPaths[0] === b.path) state.parallelPaths[0] = "";
-            if (state.parallelPaths[1] === b.path) state.parallelPaths[1] = "";
-            saveParallelPrefs();
-            try { fillParallelSelects(); } catch (pe) { console.warn(pe); }
-            loadChapter();
-          } catch (err) {
-            console.error("bible switch failed", err);
-            var errBox = el("chapter-error");
-            if (errBox) {
-              errBox.style.display = "block";
-              errBox.textContent = "Error al cambiar Biblia: " + (err.message || err);
-            }
-          }
-        };
-        frag.appendChild(item);
-      })(list[i]);
-    }
-    panel.appendChild(frag);
+    // 866 rows are built on first open; after that only the marks change.
     syncBiblePill();
+    if (navUi.bibleBuiltFor) markActiveBible();
   }
 
-  /** Keep header book/bible labels in sync after nav jumps */
+  /** Keep header labels and marks in sync after nav jumps (cheap: no list is rebuilt). */
   function syncHeaderPills() {
     syncBookPill();
     syncBiblePill();
-    fillBookPill();
-    fillBiblePill();
+    syncChapterPill();
+    markActiveBook();
+    if (navUi.bibleBuiltFor) markActiveBible();
+  }
+
+  /** Delegated handlers for the four panels; wired once (wireEvents can run again on boot). */
+  function wireNavPopovers() {
+    if (navUi.wired) return;
+    navUi.wired = true;
+
+    var bookPanel = el("pill-book-panel");
+    if (bookPanel) {
+      bookPanel.addEventListener("click", function (ev) {
+        var t = ev.target && ev.target.closest ? ev.target.closest("button") : null;
+        if (!t || !bookPanel.contains(t)) return;
+        if (t.classList.contains("bk-item")) {
+          chooseBook(parseInt(t.getAttribute("data-book"), 10));
+        } else if (t.id === "bk-back") {
+          showBookStep("books");
+          var input = el("book-search");
+          if (input) {
+            try { input.focus({ preventScroll: true }); } catch (e) {}
+          }
+        } else if (t.id === "bk-goto") {
+          if (navUi.ref) navigateTo(navUi.ref.bookNumber, navUi.ref.chapter, navUi.ref.verse);
+        } else if (t.classList.contains("num") && t.parentNode && t.parentNode.id === "bk-ch-grid") {
+          navigateTo(navUi.pendingBook, parseInt(t.getAttribute("data-n"), 10), null);
+        }
+      });
+      bookPanel.addEventListener("keydown", function (ev) {
+        var chs = el("bk-step-chapters");
+        if (!chs || chs.hidden) return;
+        if (ev.key === "Backspace") {
+          ev.preventDefault();
+          showBookStep("books");
+          var input = el("book-search");
+          if (input) {
+            try { input.focus({ preventScroll: true }); } catch (e) {}
+          }
+          return;
+        }
+        gridKeydown(ev, el("bk-ch-grid"), el("bk-ch-sub"));
+      });
+    }
+    var bookSearch = el("book-search");
+    if (bookSearch) {
+      bookSearch.addEventListener("input", function () {
+        filterBooks(this.value);
+        var body = el("pill-book-list");
+        if (body) body.scrollTop = 0;
+      });
+      bookSearch.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          if (navUi.ref) {
+            navigateTo(navUi.ref.bookNumber, navUi.ref.chapter, navUi.ref.verse);
+            return;
+          }
+          var first = el("pill-book-list").querySelector(".bk-item:not([hidden])");
+          if (first && this.value.trim()) chooseBook(parseInt(first.getAttribute("data-book"), 10));
+        } else if (ev.key === "Escape" && this.value) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          this.value = "";
+          filterBooks("");
+        } else if (ev.key === "ArrowDown") {
+          var f = el("pill-book-list").querySelector(".bk-goto:not([hidden]), .bk-item:not([hidden])");
+          if (f) {
+            ev.preventDefault();
+            try { f.focus({ preventScroll: true }); } catch (e) {}
+          }
+        }
+      });
+    }
+
+    var chPanel = el("pill-chapter-panel");
+    if (chPanel) {
+      chPanel.addEventListener("click", function (ev) {
+        var cell = ev.target && ev.target.closest ? ev.target.closest(".num") : null;
+        if (!cell || !chPanel.contains(cell)) return;
+        navigateTo(state.bookNumber, parseInt(cell.getAttribute("data-n"), 10), null);
+      });
+      chPanel.addEventListener("keydown", function (ev) {
+        gridKeydown(ev, chPanel.querySelector(".num-grid"), chPanel.querySelector(".pop-hint"));
+      });
+    }
+
+    var versePanel = el("pill-verse-panel");
+    if (versePanel) {
+      versePanel.addEventListener("click", function (ev) {
+        var cell = ev.target && ev.target.closest ? ev.target.closest(".num") : null;
+        if (!cell || !versePanel.contains(cell)) return;
+        closeAllPillDropdowns();
+        selectVerse(parseInt(cell.getAttribute("data-n"), 10), true);
+      });
+      versePanel.addEventListener("keydown", function (ev) {
+        gridKeydown(ev, versePanel.querySelector(".num-grid"), versePanel.querySelector(".pop-hint"));
+      });
+    }
+
+    var bibleList = el("pill-bible-list");
+    if (bibleList) {
+      bibleList.addEventListener("click", function (ev) {
+        var row = ev.target && ev.target.closest ? ev.target.closest(".bb-row") : null;
+        if (!row || !bibleList.contains(row)) return;
+        var rec = navUi.bibleRows[parseInt(row.getAttribute("data-i"), 10)];
+        if (rec) pickBible(rec.b);
+      });
+      // The pointer and the arrow keys share one highlight.
+      bibleList.addEventListener("mousemove", function (ev) {
+        var row = ev.target && ev.target.closest ? ev.target.closest(".bb-row") : null;
+        if (!row || row === navUi.kbNode) return;
+        var i = navUi.shown.indexOf(row);
+        if (i >= 0) setBibleKb(i, false);
+      });
+    }
+    var bibleSearch = el("bible-search");
+    if (bibleSearch) {
+      bibleSearch.addEventListener("input", function () {
+        filterBibles(this.value);
+        var body = el("pill-bible-list");
+        if (body) body.scrollTop = 0;
+      });
+      bibleSearch.addEventListener("keydown", function (ev) {
+        if (ev.key === "ArrowDown") { ev.preventDefault(); moveBibleKb(1); }
+        else if (ev.key === "ArrowUp") { ev.preventDefault(); moveBibleKb(-1); }
+        else if (ev.key === "PageDown") { ev.preventDefault(); moveBibleKb(8); }
+        else if (ev.key === "PageUp") { ev.preventDefault(); moveBibleKb(-8); }
+        else if (ev.key === "Enter") {
+          ev.preventDefault();
+          var node = navUi.kbNode || (this.value.trim() ? navUi.shown[0] : null);
+          var rec = node ? navUi.bibleRows[parseInt(node.getAttribute("data-i"), 10)] : null;
+          if (rec) pickBible(rec.b);
+        } else if (ev.key === "Escape" && this.value) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          this.value = "";
+          filterBibles("");
+        }
+      });
+    }
+    var clear = el("bible-search-clear");
+    if (clear) {
+      clear.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        var input = el("bible-search");
+        if (!input) return;
+        input.value = "";
+        filterBibles("");
+        try { input.focus({ preventScroll: true }); } catch (e) {}
+      });
+    }
   }
 
   function tokenizeWords(text) {
@@ -4254,34 +5056,14 @@
       " · C:\\Program Files (x86)\\e-Sword";
   }
 
+  /** Names kept from the old modal: the Versículo button now opens a popover in the header. */
   function openVerseModal() {
-    var bm = bookMeta();
-    el("verse-modal-title").textContent = "Versículos · " + bm.name + " " + state.chapter;
-    el("verse-modal-sub").textContent =
-      state.verses.length
-        ? "Hay " + state.verses.length + " versículos. Elige uno:"
-        : "Carga el capítulo primero.";
-    var grid = el("verse-pick-grid");
-    grid.innerHTML = "";
-    for (var i = 0; i < state.verses.length; i++) {
-      var v = state.verses[i].verse;
-      var b = document.createElement("button");
-      b.type = "button";
-      b.textContent = String(v);
-      if (state.selectedVerse === v) b.className = "current";
-      (function (num) {
-        b.onclick = function () {
-          closeVerseModal();
-          selectVerse(num, true);
-        };
-      })(v);
-      grid.appendChild(b);
-    }
-    el("verse-modal").classList.add("open");
+    togglePillDropdown("pill-verse");
   }
 
   function closeVerseModal() {
-    el("verse-modal").classList.remove("open");
+    var root = el("pill-verse");
+    if (root && root.classList.contains("open")) closeAllPillDropdowns();
   }
 
   // ---- Suggest dropdown helpers ----
@@ -4890,6 +5672,7 @@
         if (statusEl) statusEl.textContent = status;
         try {
           renderVerses(el("search-verse") ? el("search-verse").value : "");
+          applyPendingScroll(bookNumber, chapter);
           updateNoteUI();
           updateSelectionUI();
           updateHlBarUI();
@@ -5911,63 +6694,44 @@
     if (window.__ADC_EVENTS_WIRED__ && window.__ADC_FULL_WIRED__) return;
     window.__ADC_EVENTS_WIRED__ = true;
 
-    // Custom book / bible pills (full label always visible)
-    if (el("pill-book-btn")) {
-      el("pill-book-btn").onclick = function (ev) {
-        ev.stopPropagation();
-        togglePillDropdown("pill-book");
-      };
+    // Header navigation: Libro · capítulo · Versículo · Biblia (one popover family)
+    var navMenus = [
+      ["pill-book-btn", "pill-book"],
+      ["pill-chapter-btn", "pill-chapter"],
+      ["btn-verse-picker", "pill-verse"],
+      ["pill-bible-btn", "pill-bible"]
+    ];
+    for (var nm = 0; nm < navMenus.length; nm++) {
+      (function (pair) {
+        var trigger = el(pair[0]);
+        if (!trigger) return;
+        trigger.onclick = function (ev) {
+          ev.stopPropagation();
+          togglePillDropdown(pair[1]);
+        };
+      })(navMenus[nm]);
     }
-    if (el("pill-bible-btn")) {
-      el("pill-bible-btn").onclick = function (ev) {
-        ev.stopPropagation();
-        togglePillDropdown("pill-bible");
-      };
-    }
+    wireNavPopovers();
     document.addEventListener("click", function (ev) {
       if (ev.target && ev.target.closest && ev.target.closest(".pill-dd")) return;
       closeAllPillDropdowns();
     });
     document.addEventListener("keydown", function (ev) {
-      if (ev.key === "Escape") closeAllPillDropdowns();
+      if (ev.key !== "Escape") return;
+      var openDd = document.querySelector(".pill-dd.open");
+      if (!openDd) return;
+      var focusInside = openDd.contains(document.activeElement);
+      closeAllPillDropdowns();
+      if (focusInside) {
+        var trigger = openDd.querySelector(".pill-dd-btn");
+        if (trigger) {
+          try { trigger.focus({ preventScroll: true }); } catch (e) {}
+        }
+      }
     });
-
-    if (el("sel-chapter")) {
-      el("sel-chapter").onchange = function () {
-        state.chapter = parseInt(this.value, 10) || 1;
-        state.selectedVerse = null;
-        state.selectedWord = null;
-        loadChapter();
-      };
-    }
-    if (el("btn-prev")) {
-      el("btn-prev").onclick = function () {
-        if (state.chapter > 1) {
-          state.chapter--;
-          state.selectedVerse = null;
-          state.selectedWord = null;
-          loadChapter();
-        }
-      };
-    }
-    if (el("btn-next")) {
-      el("btn-next").onclick = function () {
-        var max = bookMeta().chapters || 1;
-        if (state.chapter < max) {
-          state.chapter++;
-          state.selectedVerse = null;
-          state.selectedWord = null;
-          loadChapter();
-        }
-      };
-    }
-    if (el("btn-verse-picker")) el("btn-verse-picker").onclick = openVerseModal;
-    if (el("verse-modal-close")) el("verse-modal-close").onclick = closeVerseModal;
-    if (el("verse-modal")) {
-      el("verse-modal").onclick = function (ev) {
-        if (ev.target === el("verse-modal")) closeVerseModal();
-      };
-    }
+    // ‹ › also cross into the previous / next book (Hechos 28 › Romanos 1)
+    if (el("btn-prev")) el("btn-prev").onclick = function () { stepChapter(-1); };
+    if (el("btn-next")) el("btn-next").onclick = function () { stepChapter(1); };
 
     // Lectura / Paralela subtabs + history
     var subtabs = el("bible-subtabs");

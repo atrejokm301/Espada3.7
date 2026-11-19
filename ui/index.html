@@ -216,6 +216,10 @@
     html[data-theme="fluent-glass"] .ctx-menu {
       background: rgba(16, 20, 30, 0.92) !important;
     }
+    html[data-theme="fluent-glass"] .pill-dd-panel {
+      backdrop-filter: blur(28px) saturate(1.25);
+      -webkit-backdrop-filter: blur(28px) saturate(1.25);
+    }
     /*
      * Frosted glass only: verse / Strong’s hover + click previews.
      * Keep real glass (~90% fill) + heavy frost blur — not solid navy.
@@ -345,107 +349,270 @@
       border: 1px solid var(--border); border-radius: 8px;
       padding: 7px 10px; font-size: 13px;
     }
-    /* Header nav pills */
+    /* ===== Header navigation: Libro · capítulo · Versículo · Biblia =====
+       One family: a segmented capsule for the passage, a capsule for the Bible, and popovers
+       that share one surface, one search field and one number grid. Colours come only from
+       the theme tokens, so every theme keeps its own look. */
     header.app-header .controls {
-      gap: 6px;
+      gap: 8px;
       align-items: center;
     }
-    header.app-header .controls select {
-      border-radius: 999px;
-      padding: 6px 22px 6px 10px;
-      min-height: 32px;
-      height: 32px;
-      font-size: 12.5px;
-      box-sizing: border-box;
+    .nav-ico {
+      width: 15px;
+      height: 15px;
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
-    /* Chapter only: compact native select — must fit 1–3 digits (e.g. 150).
-       Custom caret so WebView2/Windows OS chevron does not cover the number. */
-    header.app-header .controls #sel-chapter {
-      width: 4.75rem;
-      min-width: 4.75rem;
-      max-width: 5.5rem;
-      padding: 6px 1.55rem 6px 0.55rem;
-      text-align: center;
-      text-align-last: center;
-      font-variant-numeric: tabular-nums;
-      font-feature-settings: "tnum" 1;
-      box-sizing: border-box;
+    .nav-cluster {
+      display: inline-flex;
+      align-items: center;
       flex-shrink: 0;
-      -webkit-appearance: none;
-      -moz-appearance: none;
-      appearance: none;
-      background-color: var(--input-bg);
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%2394a3b8' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 0.55rem center;
-      background-size: 10px 6px;
+      height: 36px;
+      padding: 3px;
+      gap: 1px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--input-bg);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
     }
-    /* Custom book / bible pills — label is full text (not native <select>) */
+    .nav-sep {
+      flex: 0 0 auto;
+      width: 1px;
+      height: 18px;
+      margin: 0 3px;
+      background: var(--border);
+    }
     .pill-dd {
       position: relative;
       flex-shrink: 0;
     }
-    .pill-dd-btn {
+    .pill-dd-btn,
+    .nav-arrow {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      height: 32px;
-      max-width: none;
-      padding: 0 12px 0 14px;
+      justify-content: center;
+      gap: 7px;
+      height: 28px;
+      padding: 0 12px;
+      border: 1px solid transparent;
       border-radius: 999px;
-      border: 1px solid var(--border);
-      background: var(--input-bg);
+      background: transparent;
       color: var(--text);
-      font-size: 12.5px;
-      line-height: 1.2;
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1;
       white-space: nowrap;
       cursor: pointer;
+      transition: background-color .12s ease, color .12s ease, border-color .12s ease;
     }
-    .pill-dd-btn:hover {
-      border-color: var(--accent);
-      color: var(--accent);
+    .nav-arrow {
+      width: 28px;
+      padding: 0;
+      color: var(--muted);
     }
-    .pill-dd.open .pill-dd-btn {
-      border-color: var(--accent);
-      color: var(--accent);
+    .nav-arrow .nav-ico {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2.2;
+    }
+    .pill-dd-btn:hover,
+    .nav-arrow:hover:not(:disabled) {
+      border-color: transparent;
       background: var(--accent-soft);
+      color: var(--accent);
     }
-    .pill-dd-text {
-      white-space: nowrap;
-      overflow: visible;
-      text-overflow: clip;
-      max-width: none;
+    .nav-arrow:disabled { opacity: .3; }
+    .pill-dd-btn .nav-ico { color: var(--muted); }
+    .pill-dd-btn:hover .nav-ico,
+    .pill-dd.open > .pill-dd-btn .nav-ico { color: inherit; }
+    .pill-dd.open > .pill-dd-btn {
+      background: var(--accent-soft);
+      color: var(--accent);
     }
+    .pill-dd-text { white-space: nowrap; }
     .pill-dd-caret {
-      font-size: 10px;
-      opacity: 0.75;
-      flex-shrink: 0;
+      width: 12px;
+      height: 12px;
+      opacity: .65;
+      transition: transform .16s ease;
     }
+    .pill-dd.open > .pill-dd-btn .pill-dd-caret { transform: rotate(180deg); }
+    .pill-dd-btn.nav-num { padding: 0 6px; }
+    .nav-num .pill-dd-text {
+      min-width: 1.9em;
+      text-align: center;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+    }
+    .pill-dd.nav-solo > .pill-dd-btn {
+      height: 36px;
+      padding: 0 14px 0 12px;
+      border-color: var(--border);
+      background: var(--input-bg);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+      font-weight: 650;
+    }
+    .pill-dd.nav-solo > .pill-dd-btn:hover,
+    .pill-dd.nav-solo.open > .pill-dd-btn {
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .pill-dd-btn:focus-visible,
+    .nav-arrow:focus-visible,
+    .pill-dd-panel button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    /* Popover surface (all four menus) */
     .pill-dd-panel {
       display: none;
       position: absolute;
-      top: calc(100% + 4px);
+      top: calc(100% + 8px);
       left: 0;
       z-index: 80;
-      min-width: 100%;
-      max-width: min(280px, 70vw);
-      max-height: min(320px, 50vh);
-      overflow: auto;
-      padding: 6px;
-      border-radius: 12px;
+      flex-direction: column;
+      min-width: 220px;
+      max-width: calc(100vw - 24px);
+      max-height: min(640px, calc(100vh - 96px));
+      overflow: hidden;
       border: 1px solid var(--border);
+      border-radius: 16px;
       background: var(--panel-2);
-      box-shadow: var(--shadow);
+      box-shadow: var(--shadow), 0 1px 3px rgba(0, 0, 0, 0.06);
+      color: var(--text);
+      text-align: left;
+      transform-origin: top left;
     }
-    .pill-dd.open .pill-dd-panel { display: block; }
+    /* In the capsule: line the panel up with the capsule's edge, not the segment's */
+    .nav-cluster .pill-dd-panel {
+      top: calc(100% + 12px);
+      left: -4px;
+    }
+    .pill-dd.open > .pill-dd-panel {
+      display: flex;
+      animation: pop-in .14s ease-out;
+    }
     .pill-dd-panel[data-align="right"] {
       left: auto;
       right: 0;
+      transform-origin: top right;
     }
+    .pill-dd-panel [hidden] { display: none !important; }
+    @keyframes pop-in {
+      from { opacity: 0; transform: translateY(-4px) scale(.985); }
+      to { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .pill-dd.open > .pill-dd-panel { animation: none; }
+      .pill-dd-caret { transition: none; }
+    }
+    .pop-head {
+      flex: 0 0 auto;
+      padding: 10px 10px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .pop-body {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      padding: 6px 8px 10px;
+    }
+    .pop-title {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 12px 14px 8px;
+    }
+    .pop-title b {
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+    .pop-hint {
+      font-size: 11.5px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .pop-hint.typing {
+      color: var(--accent);
+      font-weight: 650;
+    }
+    /* Search well inside a popover: part of the panel, not a box dropped on it */
+    .pop-search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 36px;
+      padding: 0 6px 0 11px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: var(--hover-row);
+      color: var(--muted);
+      cursor: text;
+      transition: border-color .12s ease, box-shadow .12s ease, background-color .12s ease;
+    }
+    .pop-search:focus-within {
+      border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+      background: var(--input-bg);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+      color: var(--accent);
+    }
+    .pop-search input {
+      flex: 1 1 auto;
+      min-width: 0;
+      height: 100%;
+      padding: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .pop-search input::placeholder {
+      color: var(--muted);
+      opacity: .9;
+    }
+    .pop-clear {
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: none;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+    }
+    .pop-clear:hover {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .pop-clear .nav-ico {
+      width: 13px;
+      height: 13px;
+    }
+    .pop-kbd {
+      margin-left: auto;
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font: 500 10.5px var(--font-ui);
+    }
+
+    /* Plain list the mini loader paints for the moment before app.js takes over */
     .pill-dd-item {
       display: block;
       width: 100%;
-      text-align: left;
       padding: 8px 10px;
       border: none;
       border-radius: 8px;
@@ -453,53 +620,310 @@
       color: var(--text);
       font-size: 12.5px;
       line-height: 1.35;
-      cursor: pointer;
+      text-align: left;
       white-space: normal;
     }
-    .pill-dd-item:hover {
+    .pill-dd-item:hover,
+    .pill-dd-item.active {
       background: var(--accent-soft);
       color: var(--accent);
     }
-    .pill-dd-item.active {
+    .pill-dd-item.active { font-weight: 700; }
+    .pill-dd-item .pdd-sub {
+      display: block;
+      margin-top: 2px;
+      font-size: 10.5px;
+      font-weight: 400;
+      color: var(--muted);
+    }
+
+    /* Number grid (capítulos, versículos) */
+    .num-grid {
+      display: grid;
+      grid-template-columns: repeat(var(--cols, 10), 40px);
+      gap: 4px;
+      padding: 0 6px 4px;
+    }
+    .num-grid .num {
+      width: 40px;
+      height: 34px;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: var(--hover-row);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+    }
+    .num-grid .num:hover {
+      border-color: transparent;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .num-grid .num.cur {
+      border-color: color-mix(in srgb, var(--accent) 55%, transparent);
       background: var(--accent-soft);
       color: var(--accent);
       font-weight: 700;
     }
-    .pill-dd-item .pdd-sub {
-      display: block;
-      font-size: 10.5px;
-      color: var(--muted);
-      font-weight: 400;
-      margin-top: 2px;
+
+    /* Libro: Antiguo and Nuevo Testamento side by side, grouped like a table of contents */
+    /* Width comes from the content (each column as wide as its longest name, for every UI
+       font) and is fixed in JS on open, so filtering never resizes the panel. */
+    .pop-book { width: max-content; }
+    .pop-book .pop-body { padding: 10px 10px 12px; }
+    .bk-goto {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      margin: 0 0 10px;
+      padding: 9px 12px;
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+      border-radius: 10px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 650;
+      text-align: left;
     }
-    header.app-header .controls #btn-prev,
-    header.app-header .controls #btn-next {
-      width: 32px;
-      height: 32px;
-      min-width: 32px;
-      padding: 0;
-      border-radius: 999px;
+    .bk-goto:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .bk-cols {
+      display: grid;
+      grid-template-columns: max-content max-content;
+      gap: 0 22px;
+    }
+    .bk-testament { min-width: 0; }
+    .bk-th {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 0 6px 8px;
+      padding-bottom: 7px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .bk-th .bk-n {
+      margin-left: auto;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+    /* Canonical order read down each column, like a Bible's index (--rows set in app.js) */
+    .bk-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(88px, max-content));
+      grid-template-rows: repeat(var(--rows, 13), auto);
+      grid-auto-flow: column;
+      gap: 2px;
+    }
+    .bk-item {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      height: 29px;
+      padding: 0 8px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text);
+      font-size: 12.5px;
+      text-align: left;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .bk-item:hover {
+      border-color: transparent;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .bk-item.active {
+      border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .bk-step-head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 12px;
+      padding: 0 2px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .bk-back {
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      font-size: 1.1rem;
-      line-height: 1;
-      font-weight: 600;
-      flex-shrink: 0;
-    }
-    header.app-header .controls #btn-verse-picker {
+      gap: 4px;
+      height: 28px;
+      padding: 0 12px 0 6px;
+      border: 1px solid var(--border);
       border-radius: 999px;
-      padding: 6px 14px;
-      height: 32px;
+      background: transparent;
+      color: var(--text);
       font-size: 12.5px;
-      white-space: nowrap;
-      flex-shrink: 0;
     }
+    .bk-back:hover {
+      border-color: transparent;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .bk-step-title {
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .bk-step-sub {
+      margin-left: auto;
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .bk-step-sub.typing {
+      color: var(--accent);
+      font-weight: 650;
+    }
+    .bk-chapters .num-grid { padding: 0 2px; }
+    .bk-empty,
+    .bb-empty {
+      padding: 20px 12px;
+      text-align: center;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    @media (max-width: 720px) {
+      .bk-cols {
+        grid-template-columns: max-content;
+        gap: 12px;
+      }
+    }
+
+    /* Biblia: search well, Recientes, then every module (twins show their file name) */
+    .pop-bible { width: 468px; }
+    .pop-bible .pop-body { padding: 2px 6px 8px; }
+    .bb-label {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin: 10px 10px 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .bb-label .bb-n {
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+    .bb-row {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      width: 100%;
+      padding: 7px 10px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.3;
+      text-align: left;
+      /* 866 rows: lay out only the ones in view (each remembers its real height once seen) */
+      content-visibility: auto;
+      contain-intrinsic-size: auto 34px;
+    }
+    .bb-row:hover,
+    .bb-row.kb {
+      border-color: transparent;
+      background: var(--hover-row);
+      color: var(--text);
+    }
+    .bb-row.active { background: var(--accent-soft); }
+    /* content-visibility clips paint to the row: keep its focus ring inside */
+    .pill-dd-panel .bb-row:focus-visible { outline-offset: -2px; }
+    .bb-row.active:hover,
+    .bb-row.active.kb {
+      border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+      background: var(--accent-soft);
+    }
+    .bb-abbr {
+      flex: 0 0 auto;
+      min-width: 76px;
+      max-width: 40%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+    }
+    .bb-row.active .bb-abbr { color: var(--accent); }
+    .bb-desc {
+      flex: 1 1 auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .bb-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+    .bb-file {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+      font-size: 10.5px;
+      color: var(--muted);
+      opacity: .8;
+    }
+    .bb-row::after {
+      content: "";
+      flex: 0 0 auto;
+      align-self: center;
+      width: 16px;
+      height: 16px;
+      background: var(--accent);
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / 16px 16px no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / 16px 16px no-repeat;
+      visibility: hidden;
+    }
+    .bb-row.active::after { visibility: visible; }
+
+    /* Selection chip and the offline status, sized to sit beside the capsules */
     header.app-header .controls .chip,
     header.app-header .controls .badge {
       flex-shrink: 0;
-      font-size: 11px;
-      max-width: 11rem;
+      height: 28px;
+      padding: 0 12px;
+      font-size: 11.5px;
+      line-height: 26px;
+      max-width: 13rem;
+    }
+    header.app-header .controls .chip { display: inline-block; }
+    header.app-header .controls .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+      background: transparent;
+      font-weight: 600;
+    }
+    header.app-header .controls .badge::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent);
     }
     button { cursor: pointer; }
     button:hover { border-color: var(--accent); color: var(--accent); }
@@ -1502,13 +1926,6 @@
       text-decoration: underline; text-underline-offset: 3px;
     }
     .modal .body { padding: 12px; overflow: auto; flex: 1; }
-    .verse-pick {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 6px;
-    }
-    .verse-pick button { padding: 8px 4px; text-align: center; }
-    .verse-pick button.current {
-      border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
-    }
     .sel-tools { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .sel-tools #btn-to-xref {
       border-color: var(--accent);
@@ -2238,18 +2655,43 @@
     }
 
     function fillChapterSelect() {
-      var sel = document.getElementById("sel-chapter");
-      if (!sel) return;
       var max = bookMeta().chapters || 1;
       if (M.chapter > max) M.chapter = 1;
-      sel.innerHTML = "";
+      var text = document.getElementById("pill-chapter-text");
+      if (text) text.textContent = String(M.chapter);
+    }
+
+    /* Plain chapter grid for the moments before app.js takes over (it rebuilds the panel). */
+    function fillChapterPill() {
+      var panel = document.getElementById("pill-chapter-panel");
+      if (!panel) return;
+      var max = bookMeta().chapters || 1;
+      panel.innerHTML = "";
+      var body = document.createElement("div");
+      body.className = "pop-body";
+      var grid = document.createElement("div");
+      grid.className = "num-grid";
+      grid.style.setProperty("--cols", String(Math.min(max, 10)));
       for (var c = 1; c <= max; c++) {
-        var o = document.createElement("option");
-        o.value = String(c);
-        o.textContent = String(c);
-        sel.appendChild(o);
+        (function (n) {
+          var b = document.createElement("button");
+          b.type = "button";
+          b.className = "num" + (n === M.chapter ? " cur" : "");
+          b.textContent = String(n);
+          b.onclick = function (ev) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeAllPills();
+            if (M.chapter === n) return;
+            M.chapter = n;
+            fillChapterSelect();
+            loadChapter();
+          };
+          grid.appendChild(b);
+        })(c);
       }
-      sel.value = String(M.chapter);
+      body.appendChild(grid);
+      panel.appendChild(body);
     }
 
     function syncPills() {
@@ -2342,7 +2784,8 @@
     }
 
     function fillBookPill() {
-      var panel = document.getElementById("pill-book-panel");
+      // The list area only: the panel also holds the search row app.js turns on.
+      var panel = document.getElementById("pill-book-list") || document.getElementById("pill-book-panel");
       if (!panel) return;
       panel.innerHTML = "";
       for (var i = 0; i < M.books.length; i++) {
@@ -2369,7 +2812,7 @@
     }
 
     function fillBiblePill() {
-      var panel = document.getElementById("pill-bible-panel");
+      var panel = document.getElementById("pill-bible-list") || document.getElementById("pill-bible-panel");
       if (!panel) return;
       panel.innerHTML = "";
       var cur = M.bible && M.bible.path;
@@ -2584,11 +3027,20 @@
         closeAllPills();
       });
 
-      var selCh = document.getElementById("sel-chapter");
-      if (selCh) {
-        selCh.onchange = function () {
-          M.chapter = parseInt(this.value, 10) || 1;
-          loadChapter();
+      var chBtn = document.getElementById("pill-chapter-btn");
+      if (chBtn) {
+        chBtn.onclick = function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          var root = document.getElementById("pill-chapter");
+          var open = root && root.classList.contains("open");
+          closeAllPills();
+          if (!open && root) {
+            fillChapterPill();
+            root.classList.add("open");
+            var panel = document.getElementById("pill-chapter-panel");
+            if (panel) panel.hidden = false;
+          }
         };
       }
       var prev = document.getElementById("btn-prev");
@@ -2790,23 +3242,66 @@
           <span class="host-chip" id="host-chip" title="Espada 3.7 for Windows">Windows</span>
         </div>
         <div class="controls">
-          <div class="pill-dd" id="pill-book">
-            <button type="button" class="pill-dd-btn" id="pill-book-btn" title="Libro" aria-haspopup="listbox" aria-expanded="false">
-              <span class="pill-dd-text" id="pill-book-text">Libro</span>
-              <span class="pill-dd-caret" aria-hidden="true">▾</span>
+          <!-- Passage capsule: Libro | ‹ capítulo › | Versículo. Every menu is a .pill-dd
+               (button + panel), so the outside-click closers treat clicks inside as "stay open". -->
+          <div class="nav-cluster" role="group" aria-label="Pasaje">
+            <div class="pill-dd" id="pill-book">
+              <button type="button" class="pill-dd-btn" id="pill-book-btn" title="Libro" aria-haspopup="dialog" aria-expanded="false">
+                <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>
+                <span class="pill-dd-text" id="pill-book-text">Libro</span>
+                <svg class="nav-ico pill-dd-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="pill-dd-panel pop-book" id="pill-book-panel" role="dialog" aria-label="Elegir libro" hidden>
+                <!-- The search row stays hidden until app.js wires it (the mini loader lists books only). -->
+                <div class="pop-head" id="book-head" hidden>
+                  <label class="pop-search">
+                    <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    <input id="book-search" type="text" placeholder="Buscar libro o escribir una cita (Jn 3:16)" autocomplete="off" spellcheck="false" aria-label="Buscar libro o cita" />
+                  </label>
+                </div>
+                <div class="pop-body" id="pill-book-list"></div>
+              </div>
+            </div>
+            <span class="nav-sep" aria-hidden="true"></span>
+            <button type="button" class="nav-arrow" id="btn-prev" title="Capítulo anterior" aria-label="Capítulo anterior">
+              <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
             </button>
-            <div class="pill-dd-panel" id="pill-book-panel" role="listbox" hidden></div>
+            <div class="pill-dd" id="pill-chapter">
+              <button type="button" class="pill-dd-btn nav-num" id="pill-chapter-btn" title="Capítulo" aria-haspopup="dialog" aria-expanded="false">
+                <span class="pill-dd-text" id="pill-chapter-text">1</span>
+              </button>
+              <div class="pill-dd-panel" id="pill-chapter-panel" role="dialog" aria-label="Elegir capítulo" hidden></div>
+            </div>
+            <button type="button" class="nav-arrow" id="btn-next" title="Capítulo siguiente" aria-label="Capítulo siguiente">
+              <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <span class="nav-sep" aria-hidden="true"></span>
+            <div class="pill-dd" id="pill-verse">
+              <button type="button" class="pill-dd-btn" id="btn-verse-picker" title="Elegir versículo" aria-haspopup="dialog" aria-expanded="false">
+                <span class="pill-dd-text">Versículo</span>
+                <svg class="nav-ico pill-dd-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div class="pill-dd-panel" id="pill-verse-panel" role="dialog" aria-label="Elegir versículo" hidden></div>
+            </div>
           </div>
-          <button id="btn-prev" title="Capítulo anterior">‹</button>
-          <select id="sel-chapter" title="Capítulo"></select>
-          <button id="btn-next" title="Capítulo siguiente">›</button>
-          <button id="btn-verse-picker" title="Elegir versículo">Versículo</button>
-          <div class="pill-dd" id="pill-bible">
-            <button type="button" class="pill-dd-btn" id="pill-bible-btn" title="Biblia" aria-haspopup="listbox" aria-expanded="false">
+          <div class="pill-dd nav-solo" id="pill-bible">
+            <button type="button" class="pill-dd-btn" id="pill-bible-btn" title="Biblia" aria-haspopup="dialog" aria-expanded="false">
+              <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>
               <span class="pill-dd-text" id="pill-bible-text">Biblia</span>
-              <span class="pill-dd-caret" aria-hidden="true">▾</span>
+              <svg class="nav-ico pill-dd-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
             </button>
-            <div class="pill-dd-panel" id="pill-bible-panel" role="listbox" data-align="right" hidden></div>
+            <div class="pill-dd-panel pop-bible" id="pill-bible-panel" role="dialog" aria-label="Elegir Biblia" data-align="right" hidden>
+              <div class="pop-head" id="bible-head" hidden>
+                <label class="pop-search">
+                  <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                  <input id="bible-search" type="text" placeholder="Buscar Biblia…" autocomplete="off" spellcheck="false" aria-label="Buscar Biblia" aria-controls="pill-bible-list" />
+                  <button type="button" class="pop-clear" id="bible-search-clear" title="Borrar búsqueda" aria-label="Borrar búsqueda" hidden>
+                    <svg class="nav-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                  </button>
+                </label>
+              </div>
+              <div class="pop-body" id="pill-bible-list" role="listbox" aria-label="Biblias"></div>
+            </div>
           </div>
           <span class="chip empty" id="sel-chip" title="Selección actual">Sin selección</span>
           <span class="badge">Offline</span>
@@ -3021,20 +3516,6 @@
       <span id="foot-left">—</span>
       <span id="foot-right">C:\Program Files (x86)\e-Sword</span>
     </footer>
-  </div>
-
-  <!-- Verse picker modal -->
-  <div class="modal-bg" id="verse-modal" role="dialog" aria-modal="true">
-    <div class="modal">
-      <header>
-        <h3 id="verse-modal-title">Elegir versículo</h3>
-        <button type="button" id="verse-modal-close">Cerrar</button>
-      </header>
-      <div class="body">
-        <div class="status" style="margin-bottom:10px" id="verse-modal-sub"></div>
-        <div class="verse-pick" id="verse-pick-grid"></div>
-      </div>
-    </div>
   </div>
 
   <!-- History / Recents soft modal -->
