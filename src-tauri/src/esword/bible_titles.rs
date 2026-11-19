@@ -2,11 +2,14 @@
 //!
 //! e-Sword Bibles have no heading table: a title travels inside a verse's text —
 //! - HTML: a bold paragraph before the verse (RVR1960x, DHH, BTX, LBLA+…), or an italic line
-//!   closed by `<br>` inside an open paragraph (RV1960's psalm titles);
+//!   closed by `<br>` inside an open paragraph (RV1960's psalm titles). reina_valera_1960.bbli,
+//!   rv60a.bbli and the DHH 2002 .bbli put mid-chapter titles in bold paragraphs at the END of
+//!   the previous verse;
 //! - plain text: lines before the verse, after a leading line break (RV1960-T, NTV, PDT and
 //!   80-odd more). Mid-chapter, RV1960-T puts the title at the END of the previous verse,
-//!   after a blank line;
-//! - RTF: `{\b …}\par` groups before the verse; the DHH in RTF also puts them after it.
+//!   after a blank line. rv1960.bbli frames them in asterisks instead: «* *   Título*»;
+//! - RTF: `{\b …}\par` groups before the verse; the DHH in RTF also puts them after it, and
+//!   Reina Valera 1960.bblx centres them in a paragraph of their own (`\qc {\par \b …}`).
 //!
 //! The Bible tab used to show them as the verse's first (or last) words. `mark_titles` wraps
 //! them in markers IN PLACE: the text and its words stay exactly as before, so word marks
@@ -46,6 +49,9 @@ struct Span {
 #[derive(Debug, Default)]
 pub(crate) struct Titles {
     spans: Vec<Span>,
+    /// Asterisks that only frame a title (rv1960.bbli «* *   Dios llama a Abram*»): shown as
+    /// spaces. An asterisk is never part of a word, so the word numbers don't move.
+    blanks: Vec<usize>,
 }
 
 impl Titles {
@@ -62,6 +68,19 @@ impl Titles {
 
     /// `raw` with the markers inserted (clean it with `clean_text`).
     pub(crate) fn mark(&self, raw: &str) -> String {
+        let blanked;
+        let raw = if self.blanks.is_empty() {
+            raw
+        } else {
+            let mut b = raw.as_bytes().to_vec();
+            for &i in &self.blanks {
+                if b.get(i) == Some(&b'*') {
+                    b[i] = b' ';
+                }
+            }
+            blanked = String::from_utf8(b).unwrap_or_else(|_| raw.to_string());
+            blanked.as_str()
+        };
         let mut out = String::with_capacity(raw.len() + self.spans.len() * 6);
         let mut at = 0;
         for s in &self.spans {
@@ -84,18 +103,26 @@ impl Titles {
 /// have too many — a module that starts every verse on a new line).
 pub(crate) fn find_titles(raw: &str, text_lines: bool) -> Titles {
     let mut spans = Vec::new();
+    let mut blanks = Vec::new();
     let has_tag = raw.contains('<');
     let has_rtf = raw.contains("{\\");
     if has_tag {
         spans = html_lead(raw);
+        spans.extend(html_next(raw, spans.last().map_or(0, |s| s.end)));
     } else if has_rtf {
         spans = rtf_lead(raw);
         spans.extend(rtf_next(raw, spans.last().map_or(0, |s| s.end)));
-    } else if text_lines && (raw.contains('\n') || raw.contains('\r')) {
-        spans = text_lead(raw);
-        spans.extend(text_next(raw, spans.last().map_or(0, |s| s.end)));
+    } else if text_lines {
+        if raw.contains('*') {
+            spans = star_lead(raw, &mut blanks);
+            spans.extend(star_next(raw, spans.last().map_or(0, |s| s.end), &mut blanks));
+        }
+        if spans.is_empty() && (raw.contains('\n') || raw.contains('\r')) {
+            spans = text_lead(raw);
+            spans.extend(text_next(raw, spans.last().map_or(0, |s| s.end)));
+        }
     }
-    Titles { spans }
+    Titles { spans, blanks }
 }
 
 // ----- shared helpers -----
@@ -350,18 +377,197 @@ fn html_lead(raw: &str) -> Vec<Span> {
     }
 }
 
+/// One piece of a verse's HTML, read from the start (`html_next` reads them from the end).
+struct Item<'a> {
+    start: usize,
+    end: usize,
+    kind: ItemKind<'a>,
+}
+
+enum ItemKind<'a> {
+    /// `<p>…</p>`, `<div>…</div>`, `<h2>…</h2>`.
+    Block { attrs: String, name: String, inner: &'a str },
+    /// A paragraph opened and left open (the next verse closes it).
+    Open { attrs: String },
+    /// `<b>…</b>`, `<i>…</i>` or a bold / italic span.
+    Emph,
+    /// Any other tag.
+    Tag,
+    Text,
+}
+
+fn html_items(raw: &str, from: usize) -> Vec<Item<'_>> {
+    let mut items = Vec::new();
+    let mut pos = from;
+    while pos < raw.len() {
+        let rest = &raw[pos..];
+        if !rest.starts_with('<') {
+            let len = rest.find('<').unwrap_or(rest.len());
+            items.push(Item { start: pos, end: pos + len, kind: ItemKind::Text });
+            pos += len;
+            continue;
+        }
+        if let Some((name, attrs, open_len)) = block_open(rest) {
+            match element_len(rest, &name) {
+                Some((len, close_at)) => {
+                    let inner = &rest[open_len..close_at];
+                    items.push(Item { start: pos, end: pos + len, kind: ItemKind::Block { attrs, name, inner } });
+                    pos += len;
+                }
+                None => {
+                    items.push(Item { start: pos, end: pos + open_len, kind: ItemKind::Open { attrs } });
+                    pos += open_len;
+                }
+            }
+            continue;
+        }
+        if let Some((name, _, _, _)) = emphasis_open(rest) {
+            if let Some((len, _)) = element_len(rest, &name) {
+                items.push(Item { start: pos, end: pos + len, kind: ItemKind::Emph });
+                pos += len;
+                continue;
+            }
+        }
+        let Some(gt) = rest.find('>') else { break };
+        items.push(Item { start: pos, end: pos + gt + 1, kind: ItemKind::Tag });
+        pos += gt + 1;
+    }
+    items
+}
+
+/// A one-word centred heading: the letters of Psalm 119 («Bet», «Guímel»). Not «Selah».
+fn one_word_heading(t: &str) -> bool {
+    let n = t.chars().count();
+    (2..=8).contains(&n)
+        && t.chars().all(char::is_alphabetic)
+        && t.chars().next().is_some_and(char::is_uppercase)
+        && !["selah", "amén", "amen", "aleluya"].contains(&t.to_lowercase().as_str())
+}
+
+/// The lines of a block (`<br>` breaks them), as shown.
+fn block_lines(s: &str) -> Vec<String> {
+    RE_BR
+        .split(s)
+        .map(|piece| visible(piece).split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// Titles in bold paragraphs at the END of the verse: they belong to the next verse
+/// (reina_valera_1960.bbli, rv60a.bbli: `…con fe? </p><p>&nbsp;</p><p style="text-align:center;
+/// font-weight:bold;">El pacto de Dios con Abraham</p><p>&nbsp;`; the DHH 2002 .bbli:
+/// `…vosotros.</p><p>&nbsp;</p><p><b><i>Sal y luz del mundo</i></b>`).
+fn html_next(raw: &str, after: usize) -> Vec<Span> {
+    let items = html_items(raw, after);
+    let noise = |it: &Item| match &it.kind {
+        ItemKind::Block { inner, .. } => !has_visible(inner),
+        ItemKind::Open { .. } | ItemKind::Tag => true,
+        ItemKind::Text | ItemKind::Emph => !has_visible(&raw[it.start..it.end]),
+    };
+    // (start, end, centred, lines), from the last one
+    let mut found: Vec<(usize, usize, bool, Vec<String>)> = Vec::new();
+    let mut i = items.len();
+    // Where the first title (or its open paragraph) sits among the items.
+    let mut first_item = items.len();
+    loop {
+        while i > 0 && noise(&items[i - 1]) {
+            i -= 1;
+        }
+        if i == 0 {
+            break;
+        }
+        let it = &items[i - 1];
+        match &it.kind {
+            ItemKind::Block { attrs, name, inner } => {
+                let (b, _) = emphasis_inside(inner);
+                let bold = name.starts_with('h') || RE_BOLD_STYLE.is_match(attrs) || (b && all_emphasized(inner));
+                if !bold {
+                    break;
+                }
+                found.push((it.start, it.end, attrs.contains("center"), block_lines(inner)));
+                i -= 1;
+                first_item = i;
+            }
+            ItemKind::Emph => {
+                // In a paragraph of its own: the open <p> right before it.
+                let (b, _) = emphasis_inside(&raw[it.start..it.end]);
+                let mut j = i - 1;
+                while j > 0 && matches!(items[j - 1].kind, ItemKind::Text) && noise(&items[j - 1]) {
+                    j -= 1;
+                }
+                let Some(ItemKind::Open { attrs }) = j.checked_sub(1).map(|k| &items[k].kind) else { break };
+                if !b {
+                    break;
+                }
+                found.push((it.start, it.end, attrs.contains("center"), block_lines(&raw[it.start..it.end])));
+                i = j - 1;
+                first_item = i;
+            }
+            _ => break,
+        }
+    }
+    found.reverse();
+    let Some(first) = found.first().map(|f| f.0) else { return Vec::new() };
+    // The verse comes first and ends a sentence (not «…tiene escrito este nombre:» before an
+    // inscription in capitals), then an empty paragraph sets the title apart.
+    let verse = visible(&raw[after..first]);
+    let verse = verse.trim_end();
+    let blank = items[i..first_item].iter().any(|it| matches!(it.kind, ItemKind::Block { .. }));
+    if !has_visible(verse) || verse.ends_with([':', ',', ';']) || !blank {
+        return Vec::new();
+    }
+    for (k, (_, _, centred, lines)) in found.iter().enumerate() {
+        for (n, l) in lines.iter().enumerate() {
+            let ok = next_line(l)
+                || (*centred && one_word_heading(l))
+                // under the title: its parallel passage, «(Dt. 1.9-18)»
+                || ((k > 0 || n > 0) && RE_PARALLEL_REF.is_match(l));
+            if !ok {
+                return Vec::new();
+            }
+        }
+    }
+    found.into_iter().map(|(start, end, _, _)| Span { start, end, kind: Kind::Next }).collect()
+}
+
 // ----- RTF -----
 
-/// Whitespace and `\par` breaks at `pos`.
+/// RTF words that only break, reset or centre a paragraph (`\pard` before `\par`).
+const RTF_LAYOUT: [&str; 6] = ["\\pard", "\\par", "\\qc", "\\ql", "\\qr", "\\qj"];
+
+/// Whitespace, `\par` breaks and paragraph layout at `pos` (Reina Valera 1960.bblx opens a
+/// title with ` \pard  \pard\par \qc {\par \b\cf16 Dios llama a Abram}`).
 fn skip_rtf_breaks(raw: &str, mut pos: usize) -> usize {
-    loop {
+    'next: loop {
         let rest = &raw[pos..];
         let t = rest.trim_start();
         pos += rest.len() - t.len();
-        match t.strip_prefix("\\par") {
-            Some(r) if !r.starts_with(|c: char| c.is_ascii_alphanumeric()) => pos += 4,
-            _ => return pos,
+        for w in RTF_LAYOUT {
+            if let Some(r) = t.strip_prefix(w) {
+                if !r.starts_with(|c: char| c.is_ascii_alphanumeric()) {
+                    pos += w.len();
+                    continue 'next;
+                }
+            }
         }
+        return pos;
+    }
+}
+
+/// `s` without the paragraph layout and spaces at its end (`keep_par`: stop at a `\par`).
+fn trim_rtf_layout_end(s: &str, keep_par: bool) -> &str {
+    let mut s = s.trim_end();
+    'next: loop {
+        for w in RTF_LAYOUT {
+            if keep_par && w == "\\par" {
+                continue;
+            }
+            if let Some(t) = s.strip_suffix(w) {
+                s = t.trim_end();
+                continue 'next;
+            }
+        }
+        return s;
     }
 }
 
@@ -428,16 +634,15 @@ fn rtf_lead(raw: &str) -> Vec<Span> {
 
 /// Titles at the END of the verse, after a paragraph break: they belong to the next verse
 /// (RV1960 .bblx `…con fe? \par \par {\qc \b El pacto de Dios con Abraham\par}`; the RTF DHH
-/// `…Mesías.{\cf2\super [h]}\par \par {\b\i Nacimento de Jesús}`).
+/// `…Mesías.{\cf2\super [h]}\par \par {\b\i Nacimento de Jesús}`; Reina Valera 1960.bblx
+/// `…con fe? \par  \pard\par \qc {\par \b\cf16 El pacto de Dios con Abraham}\par\pard`, its
+/// parallel passage in a group of its own).
 fn rtf_next(raw: &str, after: usize) -> Vec<Span> {
-    let mut end = raw.trim_end().len();
-    let mut spans = Vec::new();
+    let mut end = raw.len();
+    // (start, end, centred), from the last one
+    let mut groups: Vec<(usize, usize, bool)> = Vec::new();
     loop {
-        let s = raw[..end].trim_end();
-        let s = match s.strip_suffix("\\par") {
-            Some(t) if t.ends_with('}') || t.trim_end().ends_with('}') => t.trim_end(),
-            _ => s,
-        };
+        let s = trim_rtf_layout_end(&raw[..end], false);
         if !s.ends_with('}') {
             break;
         }
@@ -446,20 +651,34 @@ fn rtf_next(raw: &str, after: usize) -> Vec<Span> {
         if g[1..g.len() - 1].contains('}') || !rtf_title_group(g) {
             break;
         }
-        if !rtf_lines_ok(g, next_line) {
-            break;
-        }
-        spans.push(Span { start: open, end: s.len(), kind: Kind::Next });
+        let pre = &raw[..open];
+        let layout = &pre[trim_rtf_layout_end(pre, false).len()..];
+        groups.push((open, s.len(), g.contains("\\qc") || layout.contains("\\qc")));
         end = open;
     }
-    spans.reverse();
-    let Some(first) = spans.first().map(|s| s.start) else { return spans };
-    // A paragraph break before them, and the verse before that.
-    let before = raw[..first].trim_end();
-    if first < after || !before.ends_with("\\par") || !has_visible(&raw[after..first]) {
+    groups.reverse();
+    let Some(first) = groups.first().map(|g| g.0) else { return Vec::new() };
+    // A blank line before them (two breaks), and before that the verse, ending a sentence.
+    let before = trim_rtf_layout_end(&raw[..first], true);
+    let blank = before
+        .strip_suffix("\\par")
+        .is_some_and(|b| trim_rtf_layout_end(b, true).ends_with("\\par"));
+    let verse = visible(&raw[after.min(first)..first]);
+    let verse = verse.trim_end();
+    if first < after || !blank || !has_visible(verse) || verse.ends_with([':', ',', ';']) {
         return Vec::new();
     }
-    spans
+    for (k, &(a, b, centred)) in groups.iter().enumerate() {
+        let g = &raw[a..b];
+        let lines = rtf_lines(g);
+        let ok = rtf_lines_ok(g, next_line)
+            || (k == 0 && centred && lines.len() == 1 && one_word_heading(&lines[0]))
+            || (k > 0 && !lines.is_empty() && lines.iter().all(|l| RE_PARALLEL_REF.is_match(l)));
+        if !ok {
+            return Vec::new();
+        }
+    }
+    groups.into_iter().map(|(start, end, _)| Span { start, end, kind: Kind::Next }).collect()
 }
 
 // ----- plain text -----
@@ -500,6 +719,7 @@ fn lead_line(t: &str) -> bool {
 fn next_line(t: &str) -> bool {
     lead_line(t)
         && t.split_whitespace().count() >= 2
+        && !t.split_whitespace().last().is_some_and(|w| w.eq_ignore_ascii_case("selah"))
         && !t.ends_with(['.', ',', ';', ':', '?', '!', '»', '"', '”', '\'', ')', ']'])
         && t.chars().next().is_some_and(|c| c.is_uppercase() || c.is_ascii_digit() || "¿¡«".contains(c))
 }
@@ -541,6 +761,112 @@ fn text_next(raw: &str, after: usize) -> Vec<Span> {
         return Vec::new();
     }
     lines.into_iter().map(|(a, b)| Span { start: a, end: b, kind: Kind::Next }).collect()
+}
+
+// ----- asterisks (rv1960.bbli) -----
+//
+// « * *   Dios llama a Abram*  Pero Jehová…», « * *   LIBRO I * El justo y los pecadores*  …»,
+// « **  Arrepentimiento…* Al músico principal. Salmo de David…*\r\n Ten piedad…», and at the end
+// of a verse «…con fe? * *   El pacto de Dios con Abraham*». A single «*» inside a verse is
+// its line break (poetry) and other Bibles use «*» for notes, so only the «* *» opener counts.
+
+static RE_STAR_OPEN: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\*[ \t]*\*").unwrap());
+static RE_STAR_NEXT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(\*)[ \t]*(\*)[ \t]*([^*\r\n]+?)[ \t]*(\*)(?:[ \t]*([^*\r\n]+?)[ \t]*(\*))?[ \t]*$").unwrap()
+});
+
+/// A title doesn't end on these (a verse cut by note marks: «… conozcamos ſu * modeﬅia»).
+fn ends_on_small_word(t: &str) -> bool {
+    const SMALL: [&str; 24] = [
+        "y", "e", "o", "u", "ni", "de", "del", "la", "el", "los", "las", "lo", "en", "a", "al", "que", "con",
+        "por", "para", "su", "sus", "ſu", "un", "una",
+    ];
+    t.split_whitespace().last().is_some_and(|w| SMALL.contains(&w.to_lowercase().as_str()))
+}
+
+/// A psalm's heading under its title: «Al músico principal. Salmo de David, cuando…».
+fn psalm_heading(t: &str) -> bool {
+    const FIRST: [&str; 15] = [
+        "Salmo", "Al", "Oración", "Masquil", "Mictam", "Cántico", "Canción", "Sigaión", "Himno", "Plegaria",
+        "Poema", "De", "Para", "Alabanza", "Testimonio",
+    ];
+    t.chars().count() <= 250
+        && t.ends_with('.')
+        && t.split_whitespace().next().is_some_and(|w| FIRST.contains(&w.trim_end_matches([',', '.', ';'])))
+}
+
+fn star_lead(raw: &str, blanks: &mut Vec<usize>) -> Vec<Span> {
+    let lead = raw.len() - raw.trim_start().len();
+    let Some(m) = RE_STAR_OPEN.find(&raw[lead..]) else { return Vec::new() };
+    let mut stars = vec![lead, lead + m.end() - 1];
+    let mut pos = lead + m.end();
+    let mut spans: Vec<Span> = Vec::new();
+    // The asterisk before this piece stood apart from the one before it («LIBRO I * El justo y
+    // los pecadores*»): a second title. A closing «Sion*» is followed by the verse.
+    let mut spaced = false;
+    loop {
+        let rest = &raw[pos..];
+        let t = rest.trim_start_matches([' ', '\t', '\u{a0}']);
+        pos += rest.len() - t.len();
+        if t.starts_with('*') {
+            stars.push(pos);
+            pos += 1;
+            continue;
+        }
+        let Some(rel) = t.find('*') else { break };
+        let piece = t[..rel].trim_end();
+        if piece.is_empty() || piece.contains(['\r', '\n']) {
+            break;
+        }
+        let kind = if spans.is_empty() {
+            (lead_line(piece) && !ends_on_small_word(piece)).then_some(Kind::Lead)
+        } else if spaced && next_line(piece) && !ends_on_small_word(piece) {
+            Some(Kind::Lead)
+        } else if RE_PARALLEL_REF.is_match(piece) || psalm_heading(piece) {
+            Some(Kind::LeadMinor)
+        } else {
+            None
+        };
+        let Some(kind) = kind else { break };
+        spans.push(Span { start: pos, end: pos + piece.len(), kind });
+        spaced = piece.len() < rel;
+        pos += rel;
+    }
+    // The verse follows, and starts a sentence.
+    let verse = raw[pos..].trim_start();
+    if spans.is_empty() || !has_visible(verse) || verse.chars().next().is_some_and(char::is_lowercase) {
+        return Vec::new();
+    }
+    blanks.extend(stars);
+    spans
+}
+
+fn star_next(raw: &str, after: usize, blanks: &mut Vec<usize>) -> Vec<Span> {
+    let body = raw.trim_end();
+    if !body.ends_with('*') {
+        return Vec::new();
+    }
+    let from = after.min(body.len());
+    let Some(c) = RE_STAR_NEXT.captures(&body[from..]) else { return Vec::new() };
+    let at = |i: usize| c.get(i).map(|m| (from + m.start(), from + m.end()));
+    let (Some(s1), Some(s2), Some((ta, tb)), Some(s4)) = (at(1), at(2), at(3), at(4)) else {
+        return Vec::new();
+    };
+    let title = &raw[ta..tb];
+    if !lead_line(title) || ends_on_small_word(title) || !has_visible(&raw[from..s1.0]) {
+        return Vec::new();
+    }
+    let mut spans = vec![Span { start: ta, end: tb, kind: Kind::Next }];
+    let mut stars = vec![s1.0, s2.0, s4.0];
+    if let (Some((ra, rb)), Some(s6)) = (at(5), at(6)) {
+        if !RE_PARALLEL_REF.is_match(&raw[ra..rb]) {
+            return Vec::new();
+        }
+        spans.push(Span { start: ra, end: rb, kind: Kind::Next });
+        stars.push(s6.0);
+    }
+    blanks.extend(stars);
+    spans
 }
 
 /// The page's words (app.js `tokenizeWords`): runs of Hebrew, of Greek, or of Latin letters and
@@ -664,6 +990,7 @@ Por aquel tiempo salió Israel a encontrar en batalla a los filisteos.
         // A closing line of a stanza after a blank line ends in punctuation; «Selah» is one word.
         assert!(spans_shown(" Muchos dicen de mi alma: \r\n\r\nNo hay para él salvación en Dios.\r\n").is_empty());
         assert!(spans_shown(" Muchos dicen de mi alma: No hay salvación para él. \r\n\r\nSelah\r\n").is_empty());
+        assert!(spans_shown(" Higaion. Selah. Jehová se ha hecho conocer en el juicio que ejecutó. \r\n\r\nHigaion. Selah\r\n").is_empty());
         // HTML: «Selah» right-aligned AFTER the verse stays in the verse.
         assert!(spans_shown("Muchos dicen de mi alma:</p> No hay salvación para él en Elohim.</p> <p align=\"right\"><i>Selah</i></p>").is_empty());
         // A verse that is only a title-like line is no title.
@@ -721,6 +1048,106 @@ Por aquel tiempo salió Israel a encontrar en batalla a los filisteos.
         let gal36 = " Así Abraham creyó a Dios, y le fue contado por justicia.{\\super\\cf6 (A)}\r ";
         assert!(spans_shown(gal36).is_empty());
         for raw in [gal31, gal35, gal36] {
+            same_words(raw);
+        }
+    }
+
+    #[test]
+    fn html_titles_after_the_verse() {
+        // reina_valera_1960.bbli
+        let gal35 = "Aquel, pues, que os suministra el Espíritu, ¿lo hace por las obras de la ley, o por el oír con fe? </p><p lang=\"en-US\" style=\"\">&nbsp;</p><p lang=\"en-US\" style=\"text-align:center;\">&nbsp;</p><p lang=\"en-US\" style=\"text-align:center;color:#C0C0C0;font-weight:bold;\">El pacto de Dios con Abraham</p><p lang=\"en-US\" style=\"\">&nbsp;";
+        assert_eq!(spans_shown(gal35), [(HEAD_NEXT, "El pacto de Dios con Abraham".into())]);
+        // rv60a.bbli: a title and its parallel passage; a letter of Psalm 119.
+        let ex1812 = "Y tomó Jetro, suegro de Moisés, holocaustos delante de Dios. </p><p lang=\"en-US\" style=\"\">&nbsp;</p><p lang=\"en-US\" style=\"text-align:center;font-weight:bold;\">Nombramiento de jueces</p><p lang=\"en-US\" style=\"text-align:center;font-weight:bold;\">(Dt. 1.9-18)</p><p lang=\"en-US\" style=\"\">&nbsp;";
+        assert_eq!(
+            spans_shown(ex1812),
+            [(HEAD_NEXT, "Nombramiento de jueces".into()), (HEAD_NEXT, "(Dt. 1.9-18)".into())]
+        );
+        let ps1198 = "Tus estatutos guardaré; </p><p lang=\"en-US\" style=\"\"> No me dejes enteramente. </p><p lang=\"en-US\" style=\"\">&nbsp;</p><p lang=\"en-US\" style=\"text-align:center;font-weight:bold;\">Bet</p><p lang=\"en-US\" style=\"\">&nbsp;";
+        assert_eq!(spans_shown(ps1198), [(HEAD_NEXT, "Bet".into())]);
+        // DHH 2002 .bbli: bold italics in a paragraph left open.
+        let mat512 = "Así persiguieron también a los profetas que vivieron antes que vosotros.<span style=\"color:#2E78C2;\"><sup>[q]</sup></span></p><p lang=\"en-US\" style=\"\">&nbsp;</p><p lang=\"en-US\" style=\"\"><b><i>Sal y luz del mundo</i></b>";
+        assert_eq!(spans_shown(mat512), [(HEAD_NEXT, "Sal y luz del mundo".into())]);
+        // A title before the verse, none after it.
+        let gal31 = "</p><p lang=\"en-US\" style=\"text-align:center;\">&nbsp;</p><p lang=\"en-US\" style=\"text-align:center;color:#C0C0C0;font-weight:bold;\">El Espíritu se recibe por la fe</p><p lang=\"en-US\" style=\"\">&nbsp;</p><p lang=\"en-US\" style=\"\"> ¡Oh gálatas insensatos! ¿quién os fascinó? </p><p lang=\"en-US\" style=\"\">&nbsp;";
+        assert_eq!(spans_shown(gal31), [(HEAD_OPEN, "El Espíritu se recibe por la fe".into())]);
+        // Not titles: «Selah» set apart, bold words inside the verse, italics only.
+        assert!(spans_shown("No hay para él salvación en Dios. </p><p style=\"text-align:center;font-weight:bold;\">Selah</p>").is_empty());
+        assert!(spans_shown("<p>Y dijo Dios: <b>Sea la luz</b></p>").is_empty());
+        assert!(spans_shown("Y dijo Dios: </p><p><b>Sea la luz</b> y fue la luz.").is_empty());
+        assert!(spans_shown("los profetas.</p><p lang=\"en-US\" style=\"\"><i>La sal y la luz</i>").is_empty());
+        // An inscription closing the verse («…este nombre:») and a bold line with no blank
+        // line before it stay in the verse.
+        assert!(spans_shown("Y en su vestidura y en su muslo tiene escrito este nombre: </p><p>&nbsp;</p><p style=\"text-align:center;font-weight:bold;\">REY DE REYES Y SEÑOR DE SEÑORES</p>").is_empty());
+        assert!(spans_shown("¿lo hace por el oír con fe? </p><p style=\"text-align:center;font-weight:bold;\">El pacto de Dios con Abraham</p>").is_empty());
+        for raw in [gal35, ex1812, ps1198, mat512, gal31] {
+            same_words(raw);
+        }
+    }
+
+    #[test]
+    fn rtf_centred_paragraph_titles() {
+        // Reina Valera 1960.bblx: `\qc` before the group, the break inside it.
+        let gn121 = " \\pard  \\pard\\par \\qc {\\par \\b\\cf16 Dios llama a Abram}\\par\\pard \\par \\par  Pero Jehová había dicho a Abram: Vete de tu tierra.{\\super\\cf6 (A)} \\par\r ";
+        assert_eq!(spans_shown(gn121), [(HEAD_OPEN, "Dios llama a Abram".into())]);
+        let gal35 = " Aquel, pues, ¿lo hace por las obras de la ley, o por el oír con fe? \\par  \\pard\\par \\qc {\\par \\b\\cf16 El pacto de Dios con Abraham}\\par\\pard\r ";
+        assert_eq!(spans_shown(gal35), [(HEAD_NEXT, "El pacto de Dios con Abraham".into())]);
+        let ex1812 = " Y tomó Jetro, suegro de Moisés, holocaustos delante de Dios. \\par  \\pard\\par \\qc {\\par \\b\\cf16 Nombramiento de jueces}\\par\\pard \\pard\\par \\qc {\\par \\b\\cf16 (Dt. 1.9-18)}\\par\\pard\r ";
+        assert_eq!(
+            spans_shown(ex1812),
+            [(HEAD_NEXT, "Nombramiento de jueces".into()), (HEAD_NEXT, "(Dt. 1.9-18)".into())]
+        );
+        let ps1198 = " Tus estatutos guardaré; \\par  No me dejes enteramente. \\par  \\pard\\par \\qc {\\par \\b\\cf16 Bet}\\par\\pard\r ";
+        assert_eq!(spans_shown(ps1198), [(HEAD_NEXT, "Bet".into())]);
+        // A chapter's last verse that ends in breaks only; an inscription after «:».
+        assert!(spans_shown(" y murió Taré en Harán.  \\par  \\par \\par\r ").is_empty());
+        assert!(spans_shown(" tiene escrito este nombre: \\par \\par {\\qc \\b REY DE REYES Y SEÑOR DE SEÑORES\\par}\r ").is_empty());
+        for raw in [gn121, gal35, ex1812, ps1198] {
+            same_words(raw);
+        }
+    }
+
+    #[test]
+    fn asterisk_titles() {
+        // rv1960.bbli
+        let gal31 = " * *   El Espíritu se recibe por la fe*  ¡Oh gálatas insensatos! ¿quién os fascinó?\r ";
+        assert_eq!(spans_shown(gal31), [(HEAD_OPEN, "El Espíritu se recibe por la fe".into())]);
+        let gal35 = " Aquel, pues, ¿lo hace por las obras de la ley, o por el oír con fe? * *   El pacto de Dios con Abraham*\r ";
+        assert_eq!(spans_shown(gal35), [(HEAD_NEXT, "El pacto de Dios con Abraham".into())]);
+        let ex1812 = " Y tomó Jetro, suegro de Moisés, holocaustos delante de Dios. * *   Nombramiento de jueces* (Dt. 1.9-18)*\r ";
+        assert_eq!(
+            spans_shown(ex1812),
+            [(HEAD_NEXT, "Nombramiento de jueces".into()), (HEAD_NEXT, "(Dt. 1.9-18)".into())]
+        );
+        let ps1198 = " Tus estatutos guardaré; *  No me dejes enteramente. * *   Bet*\r ";
+        assert_eq!(spans_shown(ps1198), [(HEAD_NEXT, "Bet".into())]);
+        let ps11 = " * *   LIBRO I * El justo y los pecadores*  Bienaventurado el varón que no anduvo en consejo de malos, *  Ni estuvo en camino de pecadores, *  Ni en silla de escarnecedores se ha sentado;\r ";
+        assert_eq!(
+            spans_shown(ps11),
+            [(HEAD_OPEN, "LIBRO I".into()), (HEAD_OPEN, "El justo y los pecadores".into())]
+        );
+        // The first line of the psalm after a title is not a second title.
+        let ps481 = " * *   Hermosura y gloria de Sion*  Grande es Jehová, y digno de ser en gran manera alabado *  En la ciudad de nuestro Dios, en su monte santo.\r ";
+        assert_eq!(spans_shown(ps481), [(HEAD_OPEN, "Hermosura y gloria de Sion".into())]);
+        let ps571 = " **  Plegaria pidiendo ser librado de los perseguidores* (Sal. 108.1-5)* Al músico principal; sobre No destruyas. Mictam de David, cuando huyó de delante de Saúl a la cueva.* Ten misericordia de mí, oh Dios, ten misericordia de mí; *  Porque en ti ha confiado mi alma,\r ";
+        assert_eq!(
+            spans_shown(ps571),
+            [
+                (HEAD_OPEN, "Plegaria pidiendo ser librado de los perseguidores".into()),
+                (HEAD_MINOR, "(Sal. 108.1-5)".into()),
+                (HEAD_MINOR, "Al músico principal; sobre No destruyas. Mictam de David, cuando huyó de delante de Saúl a la cueva.".into()),
+            ]
+        );
+        let ps511 = " **  Arrepentimiento, y plegaria pidiendo purificación* Al músico principal. Salmo de David, cuando después que se llegó a Betsabé, vino a él Natán el profeta.*\r\n Ten piedad de mí, oh Dios, conforme a tu misericordia; *  Conforme a la multitud de tus piedades borra mis rebeliones.\r ";
+        assert_eq!(spans_shown(ps511).len(), 2);
+        // The asterisks around a title go; the poetry breaks stay.
+        let shown = clean_text(&find_titles(ps481, true).mark(ps481));
+        assert_eq!(shown.matches('*').count(), 1, "{shown:?}");
+        // Not titles: a note mark (NTV), a verse cut by note marks (Oso), poetry.
+        assert!(spans_shown("* Joás* tenía siete años cuando comenzó a reinar.").is_empty());
+        assert!(spans_shown("* * Examinemoſlo con affrenta, y con tormẽto, paraq̃ conozcamos ſu * modeﬅia, y prouemos ſu paciencia. \r\n").is_empty());
+        assert!(spans_shown(" La salvación es de Jehová; *  Sobre tu pueblo sea tu bendición.  Selah\r ").is_empty());
+        for raw in [gal31, gal35, ex1812, ps1198, ps11, ps481, ps571, ps511] {
             same_words(raw);
         }
     }
@@ -821,7 +1248,16 @@ Por aquel tiempo salió Israel a encontrar en batalla a los filisteos.
         };
         let open = |f: &str| rusqlite::Connection::open_with_flags(dir.join(f), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
         let Some(plain) = open("00RVR1960.bbli") else { return };
-        for titled in ["rv1960-t_reina_valera_1960_con_ttulos_y_notas.bbli", "00RVR1960x.bbli", "Biblia Reina Valera 1960.bblx"] {
+        for titled in [
+            "rv1960-t_reina_valera_1960_con_ttulos_y_notas.bbli",
+            "00RVR1960x.bbli",
+            "Biblia Reina Valera 1960.bblx",
+            "rv1960.bbli",
+            "Reina Valera 1960.bblx",
+            "reina_valera_1960.bbli",
+            "rv60a.bbli",
+            "biblia_reina_valera_1960.bbli",
+        ] {
             let Some(conn) = open(titled) else { continue };
             let mut st = conn.prepare("SELECT Book, Chapter, Verse, Scripture FROM Bible").unwrap();
             let mut checked = 0usize;
@@ -854,6 +1290,92 @@ Por aquel tiempo salió Israel a encontrar en batalla a los filisteos.
                 eprintln!("   {b}");
             }
         }
+    }
+
+    /// EVERY verse of every installed Bible: where titles for the next verse are found (HTML,
+    /// RTF, asterisks, plain text), with examples, and words never move.
+    /// `cargo test --release --lib -- --ignored next_title_walk --nocapture`.
+    #[test]
+    #[ignore]
+    fn next_title_walk() {
+        let dir = std::path::Path::new(ESWORD);
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let mut moved = 0usize;
+        let mut report = Vec::new();
+        let mut short = std::collections::BTreeMap::<String, usize>::new();
+        for e in rd.flatten() {
+            let p = e.path();
+            if !matches!(p.extension().and_then(|x| x.to_str()), Some("bbli" | "bblx")) {
+                continue;
+            }
+            let Ok(conn) = rusqlite::Connection::open_with_flags(&p, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { continue };
+            let Ok(mut st) = conn.prepare("SELECT Book, Chapter, Verse, Scripture FROM Bible") else { continue };
+            let Ok(rows) = st.query_map([], |r| {
+                Ok((r.get::<_, i32>(0)?, r.get::<_, i32>(1)?, r.get::<_, i32>(2)?, r.get::<_, String>(3).unwrap_or_default()))
+            }) else {
+                continue;
+            };
+            // verses with a next-verse title: html, rtf, asterisks, plain text
+            let mut counts = [0usize; 4];
+            let mut examples = Vec::new();
+            for (b, c, v, raw) in rows.flatten() {
+                let t = find_titles(&raw, true);
+                if t.is_empty() {
+                    continue;
+                }
+                let marked = clean_text(&t.mark(&raw));
+                let stripped: String = marked.chars().filter(|c| !matches!(*c as u32, 0xE005..=0xE008)).collect();
+                if page_words(&stripped) != page_words(&clean_text(&raw)) {
+                    moved += 1;
+                    eprintln!("MOVED {:?} {b}:{c}:{v}: {raw:?}", p.file_name().unwrap());
+                }
+                let next: Vec<String> = t
+                    .spans
+                    .iter()
+                    .filter(|s| s.kind == Kind::Next)
+                    .map(|s| visible(&raw[s.start..s.end]).split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect();
+                if next.is_empty() {
+                    continue;
+                }
+                let k = if raw.contains('<') {
+                    0
+                } else if raw.contains("{\\") {
+                    1
+                } else if !t.blanks.is_empty() {
+                    2
+                } else {
+                    3
+                };
+                counts[k] += 1;
+                for n in &next {
+                    if n.split_whitespace().count() <= 2 {
+                        *short.entry(n.clone()).or_default() += 1;
+                    }
+                }
+                if examples.len() < 4 && (examples.is_empty() || v % 7 == 0) {
+                    examples.push(format!("{b}:{c}:{v} {next:?}"));
+                }
+            }
+            if counts.iter().any(|&n| n > 0) {
+                report.push(format!(
+                    "{:>5} html {:>5} rtf {:>5} star {:>5} text | {}\n      {}",
+                    counts[0],
+                    counts[1],
+                    counts[2],
+                    counts[3],
+                    p.file_name().unwrap().to_string_lossy(),
+                    examples.join("\n      ")
+                ));
+            }
+        }
+        report.sort();
+        for r in &report {
+            eprintln!("{r}");
+        }
+        eprintln!("short next-verse titles (1-2 words): {short:?}");
+        eprintln!("{} Bibles with next-verse titles; words moved in {moved} verses", report.len());
+        assert_eq!(moved, 0);
     }
 
     /// What marking costs a chapter load: `cargo test --release --lib -- --ignored
@@ -900,6 +1422,11 @@ Por aquel tiempo salió Israel a encontrar en batalla a los filisteos.
             "Biblia Dios Habla Hoy Latinoamericana con Deuterocanonicos (2002).bblx",
             "AB-ntv_nueva_traduccin_viviente.bbli",
             "Bb-pdt_-_la_palabra_de_dios_para_todos_2008.bbli",
+            "rv1960.bbli",
+            "Reina Valera 1960.bblx",
+            "reina_valera_1960.bbli",
+            "rv60a.bbli",
+            "biblia_dios_habla_hoy_latinoamericana_con_deuterocannicos_2002.bbli",
         ] {
             let p = std::path::Path::new(ESWORD).join(f);
             let Ok(conn) = rusqlite::Connection::open_with_flags(&p, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else { continue };
@@ -973,6 +1500,15 @@ Por aquel tiempo salió Israel a encontrar en batalla a los filisteos.
         if let Some(raw) = verse("Biblia Dios Habla Hoy Latinoamericana con Deuterocanonicos (2002).bblx", 48, 3, 1) {
             assert_eq!(spans_shown(&raw).len(), 2, "{raw:?}");
         }
+        // Titles at the end of the previous verse in HTML, RTF and asterisk layouts.
+        check("rv1960.bbli", 48, 3, 1, &[(HEAD_OPEN, "El Espíritu se recibe por la fe")]);
+        check("rv1960.bbli", 48, 3, 5, &[(HEAD_NEXT, "El pacto de Dios con Abraham")]);
+        check("rv1960.bbli", 48, 3, 6, &[]);
+        check("Reina Valera 1960.bblx", 1, 12, 1, &[(HEAD_OPEN, "Dios llama a Abram")]);
+        check("Reina Valera 1960.bblx", 48, 3, 5, &[(HEAD_NEXT, "El pacto de Dios con Abraham")]);
+        check("reina_valera_1960.bbli", 48, 3, 5, &[(HEAD_NEXT, "El pacto de Dios con Abraham")]);
+        check("rv60a.bbli", 19, 119, 8, &[(HEAD_NEXT, "Bet")]);
+        check("biblia_dios_habla_hoy_latinoamericana_con_deuterocannicos_2002.bbli", 40, 5, 12, &[(HEAD_NEXT, "Sal y luz del mundo")]);
         if let Some(raw) = verse("00RVR1960+.bbli", 19, 23, 1) {
             let got = spans_shown(&raw);
             assert!(got.len() == 1 && got[0].1.starts_with("Salmo"), "{got:?}");
