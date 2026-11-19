@@ -1253,10 +1253,17 @@ fn golden_iss12_legacy_schemas_are_readable() {
     if let Some(l) = by("LECTIO Pistas para la Lectio Divina de los Evangelios.cmtx") {
         assert!(load_commentary(&l.path, 43, 3, 16, true, true, true).is_ok());
     }
-    for f in ["TNMx Traducción del Nuevo Mundo (1987).bblx", "Testigos de Jehova (TNM).bblx"] {
+    // Judged by content since 2026-11-18: the two Testigos Bibles are e-Sword ciphertext; the
+    // TNMx with the same text is plain RTF and opens.
+    for f in ["Testigos de Jehova (TNM).bblx", "Testigos de Jehova (TNMx 1987).bblx"] {
         if let Some(t) = by(f) {
             assert!(t.encrypted, "{f} must stay encrypted");
         }
+    }
+    if let Some(t) = by("TNMx Traducción del Nuevo Mundo (1987).bblx") {
+        assert!(!t.encrypted, "plain RTF, not ciphertext");
+        let ch = load_bible_chapter(&t.path, 1, 1).unwrap();
+        assert!(ch.verses[0].plain.contains("principio"), "{}", ch.verses[0].plain);
     }
     let cs = dict("CONSTRONGES.dcti", "amor");
     assert_eq!(cs[0].topic, "AMOR");
@@ -1613,15 +1620,17 @@ fn golden_scan_flags_unchanged_except_legacy_commentaries() {
         let legacy = is_legacy_encrypted_ext(ext) || legacy_sample_encrypted(&conn, &x.kind);
         if legacy != x.encrypted {
             changed.push(format!("{} legacy={legacy} new={}", x.filename, x.encrypted));
+            // Since 2026-11-18 every legacy extension is judged by content: the only allowed
+            // change is a legacy-extension module that turns out readable.
             assert!(
-                x.kind == "commentary" && ext.eq_ignore_ascii_case("cmtx") && !x.encrypted,
+                is_legacy_encrypted_ext(ext) && !x.encrypted,
                 "unexpected encryption change: {} legacy={legacy} new={}",
                 x.filename,
                 x.encrypted
             );
         }
     }
-    eprintln!("PROBE scan encryption changes (legacy .cmtx now readable): {changed:?}");
+    eprintln!("PROBE scan encryption changes (legacy extensions now readable): {} {changed:?}", changed.len());
     let t0 = std::time::Instant::now();
     let again = mods().unwrap();
     eprintln!("PROBE scan warm cached: {:?}", t0.elapsed());

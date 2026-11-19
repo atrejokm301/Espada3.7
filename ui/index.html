@@ -10,7 +10,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <!-- Cache-bust: bump BUILD_ID whenever UI must force-reload in WKWebView -->
-  <link rel="stylesheet" href="styles.v7.css?v=release-index1" />
+  <link rel="stylesheet" href="styles.v7.css?v=release-port1" />
 </head>
 <body data-theme="true-dark">
   <div id="app">
@@ -35,6 +35,7 @@
       <button type="button" class="ws-tab" data-ws="comentario" role="tab">Comentario</button>
       <button type="button" class="ws-tab" data-ws="diccionario" role="tab">Diccionario</button>
       <button type="button" class="ws-tab" data-ws="lexico" role="tab">Léxico</button>
+      <button type="button" class="ws-tab" data-ws="devocional" role="tab">Devocional</button>
       <div class="ws-context" id="ws-context" title="Palabra / Strong activos">
         <span class="ws-ctx-label">Contexto:</span>
         <span id="ws-ctx-word">—</span>
@@ -141,6 +142,12 @@
             <span id="verse-stepper-label" class="verse-stepper-label" aria-live="polite">v.1</span>
             <button type="button" id="btn-verse-next" class="icon-btn" title="Versículo siguiente (→ o Alt+↓)" aria-label="Versículo siguiente">›</button>
           </div>
+          <div id="dev-stepper" class="verse-stepper dev-stepper hidden" role="group" aria-label="Día del devocional">
+            <button type="button" id="btn-dev-prev" class="icon-btn" title="Día anterior (←)" aria-label="Día anterior">‹</button>
+            <span id="dev-stepper-label" class="verse-stepper-label" aria-live="polite">—</span>
+            <button type="button" id="btn-dev-next" class="icon-btn" title="Día siguiente (→)" aria-label="Día siguiente">›</button>
+            <button type="button" id="btn-dev-today" class="glass-btn compact" title="Volver a la lectura de hoy">Hoy</button>
+          </div>
           <div id="commentary-filters" class="commentary-filters hidden">
             <label class="chk"><input type="checkbox" id="flt-verse" checked /> Versículo</label>
             <label class="chk"><input type="checkbox" id="flt-chapter" /> Capítulo</label>
@@ -159,9 +166,9 @@
           </div>
         </div>
 
-        <!-- Shared study view for Comentario / Diccionario / Léxico -->
+        <!-- Shared study view for Comentario / Diccionario / Léxico / Devocional -->
         <div id="view-study" class="ws-view hidden">
-          <!-- e-Sword style topic index (Diccionario only); app.v7.js fills it -->
+          <!-- e-Sword style topic index (Diccionario and Léxico); app.v7.js fills it -->
           <nav id="dict-index" class="dict-index hidden" aria-label="Índice de temas"></nav>
           <div id="study-content" class="study-content study-content-main">
             <div class="empty-state soft">Seleccione un recurso en las pestañas de arriba.</div>
@@ -312,7 +319,7 @@
   </div>
 
   <!-- Theme list first (its own file: no inline script, see the CSP above), then the app. -->
-  <script src="themes.js?v=release-index1"></script>
-  <script src="app.v7.js?v=release-index1"></script>
+  <script src="themes.js?v=release-port1"></script>
+  <script src="app.v7.js?v=release-port1"></script>
 </body>
 </html>

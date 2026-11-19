@@ -277,7 +277,7 @@ fn iss05_property_only_allowlisted_tags_are_emitted() {
         let n = 3 + (next() % 25) as usize;
         let raw: String = (0..n).map(|_| PARTS[(next() % PARTS.len() as u64) as usize]).collect();
         for tagged in [false, true] {
-            let opts = CleanOptions { tagged_words: tagged, image_placeholder: case % 2 == 0 };
+            let opts = CleanOptions { tagged_words: tagged, image_placeholder: case % 2 == 0, keep_codepage: case % 3 == 0 };
             let h = clean_esword_text_with(&raw, opts);
             assert!(!h.contains('\u{1}') && !h.contains('\u{2}') && !h.contains('\u{3}'), "case {case}: sentinel leaked: {h:?}");
             let mut rest = h.as_str();
@@ -459,10 +459,16 @@ fn iss25_underscore_refs_with_numeric_prefix() {
     assert_eq!(clean_esword_text("Gén_25:16"), "Gén 25:16");
     assert_eq!(clean_esword_text("snake_case 3:4"), "snake_case 3:4");
     // 21_nombres_de_dios: '<span>&#x05B9;</span><span>xo_15:2</span>' (old converted it
-    // only because a stray </strong> sat in between)
+    // only because a stray </strong> sat in between). Its «É» / «ú» went through the Hebrew
+    // codepage; since 2026-11-18 the codepage repair gives them back.
     assert_eq!(
         clean_esword_text("<span>&#x05B9;</span><span>xo_15:2</span>; N&#x05EA;m_23:22"),
-        "\u{5B9}xo 15:2; N\u{5EA}m 23:22"
+        "Éxo 15:2; Núm 23:22"
+    );
+    assert_eq!(
+        clean_bible_text("<span>&#x05B9;</span><span>xo_15:2</span>; N&#x05EA;m_23:22"),
+        "\u{5B9}xo 15:2; N\u{5EA}m 23:22",
+        "Bible text keeps its letters"
     );
     assert_eq!(clean_esword_text("x1Co_13:4"), "x1Co_13:4");
 }

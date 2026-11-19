@@ -101,7 +101,8 @@ Copie los archivos de módulo a una carpeta en el Mac (p. ej. `~/Desktop` o `~/D
 | `.lexi`   | Léxico      | Preferida                                  |
 | `.refi`   | Referencia  | Listado (notas temáticas; no es el grafo CR) |
 | `openbible_cross_references.sqlite` | Referencias cruzadas | ~345k enlaces (OpenBible / CC BY); ver `data/README.md` |
-| `.bblx` / `.cmtx` / `.dctx` / `.lexx` | Legado | Pueden ir **cifrados** → se marcan 🔒 y no se descifran |
+| `.devi`   | Devocional  | Una lectura por día (pestaña Devocional)   |
+| `.bblx` / `.cmtx` / `.dctx` / `.lexx` / `.refx` / `.devx` | Legado | Se leen si su texto está en claro (casi todos); solo los **cifrados** se marcan 🔒 y no se descifran |
 
 ### Referencias cruzadas (botón en la barra de lectura)
 

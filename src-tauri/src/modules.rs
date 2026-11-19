@@ -1,7 +1,7 @@
 //! e-Sword-compatible SQLite module scanning and queries.
 
 use crate::text::{
-    clean_bible_verse_tagged, clean_esword_text, looks_encrypted, own_tag_layout_stats,
+    clean_bible_text, clean_bible_verse_tagged, clean_esword_text, looks_encrypted, own_tag_layout_stats,
     own_tag_units, to_plain,
 };
 use once_cell::sync::{Lazy, OnceCell};
@@ -31,7 +31,7 @@ pub struct ModuleInfo {
     pub filename: String,
     pub title: String,
     pub abbreviation: String,
-    pub kind: String, // bible | commentary | dictionary | lexicon | reference
+    pub kind: String, // bible | commentary | dictionary | lexicon | reference | devotional
     pub encrypted: bool,
     pub has_strongs: bool,
     pub version: i32,
@@ -41,8 +41,21 @@ pub struct ModuleInfo {
 #[serde(rename_all = "camelCase")]
 pub struct VerseRow {
     pub verse: i32,
+    /// The verse without its section titles (those are in `titles`).
     pub html: String,
     pub plain: String,
+    /// Section titles the module put inside this verse's text (bible_titles.rs), in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub titles: Vec<VerseTitle>,
+}
+
+/// One section title of a verse: `lead` (drawn above the verse), `minor` (italic-only, psalm
+/// titles: drawn lighter) or `next` (stored at the end of this verse, drawn above the next one).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerseTitle {
+    pub kind: String,
+    pub html: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -422,14 +435,18 @@ fn kind_from_ext(ext: &str) -> Option<&'static str> {
         "dcti" | "dctx" | "dct" => Some("dictionary"),
         "lexi" | "lexx" | "lex" => Some("lexicon"),
         "refi" | "refx" | "ref" => Some("reference"),
+        // Devotionals: one reading per calendar day (2026-11-18, from the Windows build).
+        "devi" | "devx" => Some("devotional"),
         _ => None,
     }
 }
 
+/// The old rule (a legacy extension meant 🔒); kept for the scan-comparison golden test.
+#[cfg(test)]
 fn is_legacy_encrypted_ext(ext: &str) -> bool {
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "bblx" | "cmtx" | "dctx" | "lexx" | "refx"
+        "bblx" | "cmtx" | "dctx" | "lexx" | "refx" | "devx"
     )
 }
 
@@ -587,6 +604,7 @@ fn sample_encrypted(conn: &Connection, kind: &str) -> bool {
             }
         }
         "reference" => samples.push("SELECT Content FROM Reference LIMIT 1".into()),
+        "devotional" => samples.push("SELECT Devotion FROM Devotional WHERE length(Devotion)>0 LIMIT 1".into()),
         _ => return false,
     }
     for sql in samples {
@@ -594,6 +612,69 @@ fn sample_encrypted(conn: &Connection, kind: &str) -> bool {
             if !sample.is_empty() {
                 return looks_encrypted(&sample);
             }
+        }
+    }
+    false
+}
+
+/// One content cell of e-Sword's «sqliteplus» ciphertext: binary, a whole number of AES blocks,
+/// neither UTF-8 nor UTF-16 text nor zlib/gzip, with control bytes, and about as many distinct
+/// byte values as random bytes of that length. Short cells count too: «Testigos de Jehova
+/// (TNM).bblx» stores 80–176-byte blobs, under the 181 distinct values the Windows check needs.
+fn blob_is_ciphertext(b: &[u8]) -> bool {
+    let n = b.len();
+    if n < 32 || n % 16 != 0 {
+        return false;
+    }
+    if (b[0] == 0x78 && matches!(b[1], 0x01 | 0x5e | 0x9c | 0xda)) || (b[0] == 0x1f && b[1] == 0x8b) {
+        return false;
+    }
+    if std::str::from_utf8(b).is_ok() {
+        return false;
+    }
+    // UTF-16LE text: its high bytes are mostly zero.
+    let odd_zero = b.iter().skip(1).step_by(2).filter(|&&x| x == 0).count();
+    if odd_zero * 10 >= (n / 2) * 4 {
+        return false;
+    }
+    let ctrl = b.iter().filter(|&&x| x < 0x20 && !matches!(x, 9 | 10 | 13)).count();
+    let mut seen = [false; 256];
+    for &x in b {
+        seen[x as usize] = true;
+    }
+    let distinct = seen.iter().filter(|&&x| x).count() as f64;
+    let expected = 256.0 * (1.0 - (255.0f64 / 256.0).powi(n as i32));
+    ctrl * 25 >= n && distinct >= 0.6 * expected
+}
+
+/// The module's text cells look like e-Sword ciphertext: most of up to 3 binary cells of its
+/// main text table are (see [`blob_is_ciphertext`]).
+fn sample_ciphertext(conn: &Connection, kind: &str) -> bool {
+    let schema = detect_schema(conn);
+    let mut cells: Vec<(&str, &str)> = Vec::new();
+    match kind {
+        "bible" => cells.push(("Bible", "Scripture")),
+        "commentary" => {
+            for t in [schema.verse_cmt, schema.chapter_cmt, schema.book_cmt].into_iter().flatten() {
+                cells.push((t, "Comments"));
+            }
+        }
+        "dictionary" | "lexicon" => {
+            for ts in [schema.lex, schema.dict].into_iter().flatten() {
+                cells.push((ts.table, ts.def));
+            }
+        }
+        "reference" => cells.push(("Reference", "Content")),
+        "devotional" => cells.push(("Devotional", "Devotion")),
+        _ => return false,
+    }
+    for (table, col) in cells {
+        let sql = format!("SELECT \"{col}\" FROM \"{table}\" WHERE typeof(\"{col}\")='blob' AND length(\"{col}\")>0 LIMIT 3");
+        let Ok(mut st) = conn.prepare(&sql) else { continue };
+        let Ok(rows) = st.query_map([], |r| r.get::<_, Vec<u8>>(0)) else { continue };
+        let votes: Vec<bool> = rows.flatten().map(|b| blob_is_ciphertext(&b)).collect();
+        if !votes.is_empty() {
+            return votes.iter().filter(|&&v| v).count() * 2 > votes.len();
         }
     }
     false
@@ -777,10 +858,10 @@ pub fn scan_modules(modules_dir: &str) -> Result<Vec<ModuleInfo>, String> {
             .to_string();
         let mut version = 0;
         let mut has_strongs = false;
-        // ISS-12: commentaries are judged by content (legacy .cmtx Straubinger/LECTIO are
-        // plain text); the extension rule stays for .bblx/.dctx/.lexx/.refx.
-        let ext_rule = kind != "commentary" && is_legacy_encrypted_ext(&ext);
-        let mut encrypted = ext_rule;
+        // Every module is judged by its content, as the Windows build does (2026-11-18): the
+        // legacy extensions (.bblx/.cmtx/.dctx/.lexx/.refx/.devx) are mostly plain text — 70 of
+        // this library's 72 .bblx Bibles. Only e-Sword's ciphertext is 🔒 (`sample_ciphertext`).
+        let encrypted: bool;
 
         // Skip bad/unreadable files without aborting the whole scan
         match open_ro(&path_str) {
@@ -799,9 +880,7 @@ pub fn scan_modules(modules_dir: &str) -> Result<Vec<ModuleInfo>, String> {
                 }
                 version = v;
                 has_strongs = s || kind == "lexicon";
-                if !encrypted {
-                    encrypted = sample_encrypted(&conn, kind);
-                }
+                encrypted = sample_encrypted(&conn, kind) || sample_ciphertext(&conn, kind);
             }
             Err(_) => {
                 encrypted = true;
@@ -920,37 +999,21 @@ pub fn load_bible_chapter(
 ) -> Result<ChapterPayload, String> {
     // Detected outside with_conn: the connection mutex is not re-entrant.
     let tagged = bible_has_own_tags(module_path);
+    let ident = file_ident(module_path);
     with_conn(module_path, |conn| {
         let (title, abbr, _, _) = read_details(conn);
-        let mut stmt = conn
-            .prepare(
-                "SELECT Verse, Scripture FROM Bible WHERE Book=?1 AND Chapter=?2 ORDER BY Verse",
-            )
-            .map_err(|e| es_error(&e.to_string()))?;
-        let rows = stmt
-            .query_map(rusqlite::params![book, chapter], |row| {
-                let verse: i32 = row.get(0)?;
-                let scripture = cell_to_string(row, 1)?;
-                Ok((verse, scripture))
-            })
-            .map_err(|e| es_error(&e.to_string()))?;
-
-        let mut verses = Vec::new();
-        for r in rows.flatten() {
-            let (verse, scripture) = r;
-            if looks_encrypted(&scripture) {
-                return Err(
-                    "Este módulo parece cifrado (🔒). Use un módulo .bbli moderno sin DRM."
-                        .into(),
-                );
-            }
-            let html = if tagged {
-                clean_bible_verse_tagged(&scripture)
-            } else {
-                clean_esword_text(&scripture)
-            };
+        let rows = chapter_raw_rows(conn, book, chapter)?;
+        if rows.iter().any(|(_, s)| looks_encrypted(s)) {
+            return Err("Este módulo parece cifrado (🔒). Use un módulo .bbli moderno sin DRM.".into());
+        }
+        let raws: Vec<&str> = rows.iter().map(|(_, s)| s.as_str()).collect();
+        let text_lines = chapter_reads_text_titles(&raws);
+        remember_text_titles(module_path, ident, book, chapter, text_lines);
+        let mut verses = Vec::with_capacity(rows.len());
+        for (verse, scripture) in &rows {
+            let (html, titles) = render_bible_verse(scripture, tagged, text_lines);
             let plain = to_plain(&html);
-            verses.push(VerseRow { verse, html, plain });
+            verses.push(VerseRow { verse: *verse, html, plain, titles });
         }
 
         Ok(ChapterPayload {
@@ -970,17 +1033,92 @@ pub fn load_verse_text(
     chapter: i32,
     verse: i32,
 ) -> Result<String, String> {
-    with_conn(module_path, |conn| {
-        let scripture: String = conn
-            .query_row(
-                "SELECT Scripture FROM Bible WHERE Book=?1 AND Chapter=?2 AND Verse=?3",
-                rusqlite::params![book, chapter, verse],
-                |row| cell_to_string(row, 0),
-            )
-            .map_err(|_| "Versículo no encontrado".to_string())?;
-        let html = clean_esword_text(&scripture);
-        Ok(to_plain(&html))
+    let scripture: String = with_conn(module_path, |conn| {
+        conn.query_row(
+            "SELECT Scripture FROM Bible WHERE Book=?1 AND Chapter=?2 AND Verse=?3",
+            rusqlite::params![book, chapter, verse],
+            |row| cell_to_string(row, 0),
+        )
+        .map_err(|_| "Versículo no encontrado".to_string())
+    })?;
+    // The verse as the Bible tab shows it: without its section titles.
+    let text_lines = chapter_text_titles(module_path, book, chapter);
+    let (html, _) = render_bible_verse(&scripture, false, text_lines);
+    Ok(to_plain(&html))
+}
+
+// ─── Section titles inside verse text (bible_titles.rs, ported from Windows) ───
+
+/// A verse as the Bible tab shows it: its HTML without its section titles, and the titles.
+/// `text_lines`: read plain-text lines as titles (the chapter's guard, see below).
+pub(crate) fn render_bible_verse(raw: &str, tagged: bool, text_lines: bool) -> (String, Vec<VerseTitle>) {
+    let clean = |s: &str| if tagged { clean_bible_verse_tagged(s) } else { clean_bible_text(s) };
+    let found = crate::bible_titles::find_titles(raw, text_lines);
+    if found.is_empty() {
+        return (clean(raw), Vec::new());
+    }
+    let (pieces, body) = found.split(raw);
+    let titles = pieces
+        .into_iter()
+        .filter_map(|(kind, piece)| {
+            let html = clean(piece);
+            (!to_plain(&html).is_empty()).then(|| VerseTitle { kind: kind.as_str().to_string(), html })
+        })
+        .collect();
+    (clean(&body), titles)
+}
+
+/// Plain-text titles are read only when few verses of the chapter carry them: a module that
+/// opens every verse on a new line would turn its first lines into titles.
+fn chapter_reads_text_titles(raws: &[&str]) -> bool {
+    let leads = raws
+        .iter()
+        // Only plain-text verses can open with title lines (HTML and RTF never count here).
+        .filter(|raw| !raw.contains('<') && !raw.contains("{\\"))
+        .filter(|raw| crate::bible_titles::find_titles(raw, true).has_text_lead(raw))
+        .count();
+    leads <= 3 || leads * 5 <= raws.len() * 2
+}
+
+fn chapter_raw_rows(conn: &Connection, book: i32, chapter: i32) -> Result<Vec<(i32, String)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT Verse, Scripture FROM Bible WHERE Book=?1 AND Chapter=?2 ORDER BY Verse")
+        .map_err(|e| es_error(&e.to_string()))?;
+    let rows = stmt
+        .query_map(rusqlite::params![book, chapter], |row| Ok((row.get::<_, i32>(0)?, cell_to_string(row, 1)?)))
+        .map_err(|e| es_error(&e.to_string()))?;
+    Ok(rows.flatten().collect())
+}
+
+/// The chapter guard per (module, book, chapter), so a single verse (a tap, a preview) is cut
+/// exactly as its chapter is shown. Small and cleared when full: one chapter read each.
+static TEXT_TITLES_CACHE: Lazy<Mutex<HashMap<(String, i32, i32), (Option<FileIdent>, bool)>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+const TEXT_TITLES_CACHE_MAX: usize = 2048;
+
+fn remember_text_titles(module_path: &str, ident: Option<FileIdent>, book: i32, chapter: i32, on: bool) {
+    let mut cache = TEXT_TITLES_CACHE.lock();
+    if cache.len() >= TEXT_TITLES_CACHE_MAX {
+        cache.clear();
+    }
+    cache.insert((module_path.to_string(), book, chapter), (ident, on));
+}
+
+fn chapter_text_titles(module_path: &str, book: i32, chapter: i32) -> bool {
+    let ident = file_ident(module_path);
+    if let Some((id, on)) = TEXT_TITLES_CACHE.lock().get(&(module_path.to_string(), book, chapter)) {
+        if ident.is_some() && *id == ident {
+            return *on;
+        }
+    }
+    let on = with_conn(module_path, |conn| {
+        let rows = chapter_raw_rows(conn, book, chapter)?;
+        let raws: Vec<&str> = rows.iter().map(|(_, s)| s.as_str()).collect();
+        Ok(chapter_reads_text_titles(&raws))
     })
+    .unwrap_or(true);
+    remember_text_titles(module_path, ident, book, chapter, on);
+    on
 }
 
 fn load_raw_verse(module_path: &str, book: i32, chapter: i32, verse: i32) -> Option<String> {
@@ -1129,7 +1267,7 @@ fn load_commentary_in(
             if looks_encrypted(&comments) {
                 return Err("Módulo de comentario cifrado (🔒).".into());
             }
-            push(&mut out, "verse", r.label(), clean_esword_text(&comments));
+            push(&mut out, "verse", r.label(), titled(clean_esword_text(&comments), &comments));
         }
     }
 
@@ -1145,7 +1283,7 @@ fn load_commentary_in(
                         &mut out,
                         "chapter",
                         format!("Cap. {chapter}"),
-                        clean_esword_text(&comments),
+                        titled(clean_esword_text(&comments), &comments),
                     );
                 }
             }
@@ -1160,7 +1298,7 @@ fn load_commentary_in(
                 |row| cell_to_string(row, 0),
             ) {
                 if !comments.trim().is_empty() {
-                    push(&mut out, "book", "Libro".into(), clean_esword_text(&comments));
+                    push(&mut out, "book", "Libro".into(), titled(clean_esword_text(&comments), &comments));
                 }
             }
         }
@@ -1276,6 +1414,62 @@ fn plain_hash(s: &str) -> u64 {
     fp
 }
 
+// ─── Section titles in combined modules (sections.rs, ported from Windows) ───
+//
+// Only the main panel asks for them (`with_section_titles` around one lookup): the rules are
+// learned (or loaded) before the lookup, then every article built on this thread while it runs
+// gets its title lines wrapped. Probes, the side pane and tooltips never set them.
+
+thread_local! {
+    static SECTION_RULES: std::cell::RefCell<Option<Arc<crate::sections::TitleRules>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` with `module_path`'s section titles on (`on`), off otherwise. The previous setting is
+/// put back when `f` ends, even by unwinding (the blocking threads are reused).
+pub fn with_section_titles<T>(module_path: &str, on: bool, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Arc<crate::sections::TitleRules>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let prev = self.0.take();
+            SECTION_RULES.with(|r| *r.borrow_mut() = prev);
+        }
+    }
+    let rules = if on { section_rules(module_path) } else { None };
+    let _restore = Restore(SECTION_RULES.with(|r| r.replace(rules)));
+    f()
+}
+
+/// The module's title rules: known (memory or saved file), else learned now from a sample of its
+/// text tables (the main one first) and kept.
+fn section_rules(module_path: &str) -> Option<Arc<crate::sections::TitleRules>> {
+    if let Some(r) = crate::sections::known_rules(module_path) {
+        return Some(r);
+    }
+    let entries = with_slot(module_path, |conn, schema| {
+        let mut tables: Vec<(&str, &str)> = Vec::new();
+        for ts in [schema.lex, schema.dict].into_iter().flatten() {
+            if !tables.iter().any(|t| t.0 == ts.table) {
+                tables.push((ts.table, ts.def));
+            }
+        }
+        for t in [schema.verse_cmt, schema.chapter_cmt, schema.book_cmt].into_iter().flatten() {
+            tables.push((t, "Comments"));
+        }
+        Ok(crate::sections::sample_entries(conn, &tables))
+    })
+    .ok()?;
+    Some(crate::sections::remember_rules(module_path, &entries))
+}
+
+/// `html` (cleaned from `raw`) with its section-title lines wrapped, when the main panel asked.
+fn titled(html: String, raw: &str) -> String {
+    SECTION_RULES.with(|r| match &*r.borrow() {
+        Some(rules) if !rules.is_empty() => crate::sections::wrap_titles(&html, raw, rules),
+        _ => html,
+    })
+}
+
 /// Build a DictEntry from a raw definition. `Ok(None)` for empty definitions or entries that
 /// clean to nothing (placeholders); `Err` for encrypted text.
 fn make_entry(topic: &str, def: &str, kind: &str, enc_msg: &str) -> Result<Option<DictEntry>, String> {
@@ -1285,7 +1479,7 @@ fn make_entry(topic: &str, def: &str, kind: &str, enc_msg: &str) -> Result<Optio
     if looks_encrypted(def) {
         return Err(enc_msg.to_string());
     }
-    let (html, truncated) = truncate_entry_html(clean_esword_text(def));
+    let (html, truncated) = truncate_entry_html(titled(clean_esword_text(def), def));
     let plain = to_plain(&html);
     if plain.trim().is_empty() && !html.contains("<img") {
         return Ok(None);
@@ -1996,7 +2190,7 @@ pub fn dictionary_lookup(module_path: &str, query: &str, limit: i32) -> Result<V
 // opens any topic with a click. Big modules have tens of thousands of topics, so the UI asks
 // for windows of the sorted list; the sorted list is built once per file and cached.
 
-/// One row of a dictionary's alphabetical topic index.
+/// One row of a dictionary's (or lexicon's) alphabetical topic index.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexRow {
@@ -2005,6 +2199,10 @@ pub struct IndexRow {
     /// The topic's row in the module (opens exactly this article).
     pub rowid: i64,
     pub topic: String,
+    /// Léxico: the Greek/Hebrew headword of a Strong's-keyed row («G26» → «ἀγάπη»); empty when
+    /// the entry does not print one at its start.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lemma: String,
 }
 
 /// A window of the topic index, around a query or an anchor position.
@@ -2019,14 +2217,31 @@ pub struct IndexSlice {
     /// The topic at `focus` is the query itself (case and accents aside).
     pub exact: bool,
     pub rows: Vec<IndexRow>,
+    /// Most topics are Strong's codes (a Strong lexicon, or Vine with numbers).
+    #[serde(default)]
+    pub strong_keyed: bool,
+    /// First `G…` / `H…` row, for the Léxico's «Griego» / «Hebreo» jumps.
+    #[serde(default)]
+    pub greek_start: Option<u32>,
+    #[serde(default)]
+    pub hebrew_start: Option<u32>,
 }
 
 struct TopicIndex {
+    ts: TopicSchema,
     keys: Vec<String>,
     rows: Vec<(i64, String)>,
+    /// `b'G'` / `b'H'` for a Strong's-coded topic, 0 otherwise (same order as `rows`).
+    tags: Vec<u8>,
+    greek_start: Option<u32>,
+    hebrew_start: Option<u32>,
+    strong_rows: u32,
+    /// rowid → headword, read lazily for the rows of the windows shown ("" = none).
+    lemmas: Mutex<HashMap<i64, String>>,
 }
 
-static TOPIC_INDEX: Lazy<Mutex<HashMap<String, (Option<FileIdent>, Arc<TopicIndex>)>>> =
+/// Key: `(module path, lexicon table first)` — a module with both tables indexes each one.
+static TOPIC_INDEX: Lazy<Mutex<HashMap<(String, bool), (Option<FileIdent>, Arc<TopicIndex>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Upper bound for one window (the UI asks for ~120 rows).
@@ -2068,6 +2283,37 @@ pub(crate) fn index_key(topic: &str) -> String {
     out
 }
 
+/// `Some('G' | 'H')` when a topic is a Strong's code: G26, h1254, "G 26", G00001, H1254a.
+/// Bare numbers ("1", "2") and other prefixes (Peshito's A200001) are not.
+pub(crate) fn strong_prefix(topic: &str) -> Option<char> {
+    let t = topic.trim();
+    let mut chars = t.chars();
+    let p = chars.next()?.to_ascii_uppercase();
+    if p != 'G' && p != 'H' {
+        return None;
+    }
+    let rest = chars.as_str().trim_start();
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || digits > 5 {
+        return None;
+    }
+    let mut tail = rest[digits..].chars();
+    match (tail.next(), tail.next()) {
+        (None, _) => Some(p),
+        (Some(c), None) if c.is_ascii_alphabetic() => Some(p),
+        _ => None,
+    }
+}
+
+/// The key a typed query is looked up by: «H 01254» is the code H1254.
+fn index_query_key(q: &str) -> String {
+    if strong_prefix(q).is_some() {
+        index_key(&q.split_whitespace().collect::<String>())
+    } else {
+        index_key(q)
+    }
+}
+
 fn build_topic_index(conn: &Connection, ts: &TopicSchema) -> Result<TopicIndex, String> {
     let sql = format!("SELECT rowid, \"{}\" FROM \"{}\"", ts.topic, ts.table);
     let mut st = conn.prepare(&sql).map_err(|e| es_error(&e.to_string()))?;
@@ -2083,34 +2329,228 @@ fn build_topic_index(conn: &Connection, ts: &TopicSchema) -> Result<TopicIndex, 
         })
         .collect();
     all.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
-    let mut idx = TopicIndex { keys: Vec::with_capacity(all.len()), rows: Vec::with_capacity(all.len()) };
-    for (k, rowid, topic) in all {
+    let n = all.len();
+    let mut idx = TopicIndex {
+        ts: *ts,
+        keys: Vec::with_capacity(n),
+        rows: Vec::with_capacity(n),
+        tags: Vec::with_capacity(n),
+        greek_start: None,
+        hebrew_start: None,
+        strong_rows: 0,
+        lemmas: Mutex::new(HashMap::new()),
+    };
+    for (pos, (k, rowid, topic)) in all.into_iter().enumerate() {
+        let tag = strong_prefix(&topic).map_or(0, |c| c as u8);
+        match tag {
+            b'G' => {
+                idx.strong_rows += 1;
+                idx.greek_start.get_or_insert(pos as u32);
+            }
+            b'H' => {
+                idx.strong_rows += 1;
+                idx.hebrew_start.get_or_insert(pos as u32);
+            }
+            _ => {}
+        }
         idx.keys.push(k);
         idx.rows.push((rowid, topic));
+        idx.tags.push(tag);
     }
     Ok(idx)
 }
 
-fn topic_index_for(module_path: &str) -> Result<Arc<TopicIndex>, String> {
+/// The topic table an index (and its entries) reads: a lexicon reads `Lexicon` first, like
+/// `lexicon_lookup`; a dictionary `Dictionary` first, like `dictionary_lookup`.
+fn index_table(schema: &Schema, lexicon: bool) -> Result<TopicSchema, String> {
+    let ts = if lexicon { schema.lex } else { schema.dict };
+    ts.ok_or_else(|| "Este módulo no tiene tabla Dictionary/Lexicon.".to_string())
+}
+
+fn topic_index_for(module_path: &str, lexicon: bool) -> Result<Arc<TopicIndex>, String> {
     let ident = file_ident(module_path);
-    if let Some((id, idx)) = TOPIC_INDEX.lock().get(module_path) {
+    let key = (module_path.to_string(), lexicon);
+    if let Some((id, idx)) = TOPIC_INDEX.lock().get(&key) {
         if ident.is_some() && *id == ident {
             return Ok(idx.clone());
         }
     }
-    let idx = with_slot(module_path, |conn, schema| {
-        let ts = schema
-            .dict
-            .ok_or_else(|| "Este módulo no tiene tabla Dictionary/Lexicon.".to_string())?;
-        build_topic_index(conn, &ts)
-    })?;
+    let idx = with_slot(module_path, |conn, schema| build_topic_index(conn, &index_table(schema, lexicon)?))?;
     let idx = Arc::new(idx);
-    TOPIC_INDEX.lock().insert(module_path.to_string(), (ident, idx.clone()));
+    TOPIC_INDEX.lock().insert(key, (ident, idx.clone()));
     Ok(idx)
 }
 
+/// Raw characters of a definition read to find its headword.
+const LEMMA_SOURCE_CHARS: u32 = 2000;
+
+/// Headwords for the Strong's rows in `start..end`, reading only rows not seen before.
+fn index_lemmas(module_path: &str, idx: &TopicIndex, start: u32, end: u32) -> HashMap<i64, String> {
+    let mut out = HashMap::new();
+    let wanted: Vec<(i64, u8, String)> = {
+        let known = idx.lemmas.lock();
+        (start..end)
+            .filter_map(|p| {
+                let (rowid, topic) = &idx.rows[p as usize];
+                let tag = idx.tags[p as usize];
+                if tag == 0 {
+                    return None;
+                }
+                match known.get(rowid) {
+                    Some(l) => {
+                        if !l.is_empty() {
+                            out.insert(*rowid, l.clone());
+                        }
+                        None
+                    }
+                    None => Some((*rowid, tag, topic.clone())),
+                }
+            })
+            .collect()
+    };
+    if wanted.is_empty() {
+        return out;
+    }
+    let ts = idx.ts;
+    let read = with_slot(module_path, |conn, _| {
+        let sql = format!(
+            "SELECT CASE WHEN typeof(\"{d}\") = 'text' THEN substr(\"{d}\", 1, {LEMMA_SOURCE_CHARS}) ELSE \"{d}\" END \
+             FROM \"{t}\" WHERE rowid=?1",
+            d = ts.def,
+            t = ts.table
+        );
+        let mut st = conn.prepare_cached(&sql).map_err(|e| e.to_string())?;
+        let mut got = Vec::with_capacity(wanted.len());
+        for (rowid, tag, code) in &wanted {
+            let def: String = st.query_row([rowid], |r| cell_to_string(r, 0)).unwrap_or_default();
+            let lemma = if def.is_empty() {
+                String::new()
+            } else {
+                extract_lemma(&to_plain(&clean_esword_text(&def)), *tag as char, code).unwrap_or_default()
+            };
+            got.push((*rowid, lemma));
+        }
+        Ok(got)
+    })
+    .unwrap_or_default();
+    let mut known = idx.lemmas.lock();
+    for (rowid, lemma) in read {
+        if !lemma.is_empty() {
+            out.insert(rowid, lemma.clone());
+        }
+        known.insert(rowid, lemma);
+    }
+    out
+}
+
+fn is_hebrew_letter(c: char) -> bool {
+    matches!(c as u32, 0x05D0..=0x05EA | 0x05EF..=0x05F2 | 0xFB1D..=0xFB4F)
+}
+
+/// Vowel points and cantillation inside a Hebrew word (not maqaf, paseq or sof pasuq).
+fn is_hebrew_mark(c: char) -> bool {
+    matches!(c as u32, 0x0591..=0x05BD | 0x05BF | 0x05C1..=0x05C2 | 0x05C4..=0x05C5 | 0x05C7)
+}
+
+fn is_greek_letter(c: char) -> bool {
+    matches!(c as u32, 0x0370..=0x03FF | 0x1F00..=0x1FFF) && c.is_alphabetic()
+}
+
+fn is_combining_mark(c: char) -> bool {
+    matches!(c as u32, 0x0300..=0x036F)
+}
+
+/// A headword printed later than this (in characters) is not the entry's own word: Vine's
+/// G26 is a 274-character preface before any Greek.
+const LEMMA_WINDOW: usize = 40;
+/// Longest headword accepted, in characters (pointed Hebrew counts its vowel points).
+const LEMMA_MAX_CHARS: usize = 40;
+
+/// The Strong's code right after a word, as in «ἀγάπη G26» or «λαλέω[G2980]».
+fn adjacent_code(rest: &[char]) -> Option<String> {
+    let mut i = 0;
+    while i < rest.len() && matches!(rest[i], ' ' | '[' | '(') {
+        i += 1;
+    }
+    let p = rest.get(i)?.to_ascii_uppercase();
+    if p != 'G' && p != 'H' {
+        return None;
+    }
+    let digits: String = rest[i + 1..].iter().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() || rest.get(i + 1 + digits.len()).is_some_and(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    Some(format!("{p}{}", digits.trim_start_matches('0')))
+}
+
+/// The headword of a Strong's entry (ported from the Windows build): the first Hebrew word (H
+/// codes) or Greek word (G codes) of its plain text, accepted only when it starts within the
+/// first [`LEMMA_WINDOW`] characters and stands as a word of its own («ἀγάπη agápe; de G25…»,
+/// «Número Strong: G26 Lexema: ἀγάπη»). Rejected, because each would show a wrong word: a word
+/// glued to letters of another script (Swanson's «ἀγάπē»), a form from an occurrence list
+/// («θεε (16)»), and a word labelled with another code («λαλέω[G2980]» heading G3056).
+pub(crate) fn extract_lemma(text: &str, prefix: char, code: &str) -> Option<String> {
+    let hebrew = prefix.eq_ignore_ascii_case(&'H');
+    let is_letter = |c: char| if hebrew { is_hebrew_letter(c) } else { is_greek_letter(c) };
+    let is_mark = |c: char| if hebrew { is_hebrew_mark(c) } else { is_combining_mark(c) };
+    let chars: Vec<char> = text.chars().take(LEMMA_WINDOW + LEMMA_MAX_CHARS + 16).collect();
+    let start = chars.iter().take(LEMMA_WINDOW).position(|&c| is_letter(c))?;
+    // Whatever touches the word on the left, combining marks skipped, must not be a letter.
+    let mut before = start;
+    while before > 0 && (is_combining_mark(chars[before - 1]) || is_hebrew_mark(chars[before - 1])) {
+        before -= 1;
+    }
+    if before > 0 && chars[before - 1].is_alphabetic() {
+        return None;
+    }
+    let is_hyphen = |c: char| matches!(c, '-' | '\u{2010}');
+    let mut word = String::new();
+    let mut end = start;
+    loop {
+        while end < chars.len() && (is_letter(chars[end]) || is_mark(chars[end])) {
+            word.push(chars[end]);
+            end += 1;
+        }
+        // LSJ marks the stem with a hyphen: «ἀγάπ-η» is the headword ἀγάπη.
+        if end + 1 < chars.len() && is_hyphen(chars[end]) && is_letter(chars[end + 1]) {
+            end += 1;
+            continue;
+        }
+        break;
+    }
+    if end - start > LEMMA_MAX_CHARS {
+        return None;
+    }
+    let after = chars.get(end).copied();
+    let after_hyphen = chars.get(end + 1).copied();
+    if after.is_some_and(char::is_alphabetic) || (after.is_some_and(is_hyphen) && after_hyphen.is_some_and(char::is_alphabetic)) {
+        return None;
+    }
+    let rest = &chars[end..];
+    let spaced: Vec<char> = rest.iter().skip_while(|c| **c == ' ').copied().collect();
+    if spaced.first() == Some(&'(') {
+        let n = spaced[1..].iter().take_while(|c| c.is_ascii_digit()).count();
+        if n > 0 && spaced.get(1 + n) == Some(&')') {
+            return None;
+        }
+    }
+    if let Some(next) = adjacent_code(rest) {
+        let own: String = code.split_whitespace().collect::<String>().to_ascii_uppercase();
+        let own_num = own
+            .get(1..)
+            .map(|d| d.trim_end_matches(|c: char| c.is_ascii_alphabetic()).trim_start_matches('0'))
+            .unwrap_or("");
+        if next != format!("{}{own_num}", own.chars().next().unwrap_or(' ')) {
+            return None;
+        }
+    }
+    Some(word)
+}
+
 /// A window of the module's alphabetical topic index: `before` rows above and `after` rows from
-/// the query's position (or `anchor`, for «Anteriores…» / «Siguientes…»).
+/// the query's position (or `anchor`, for «Anteriores…» / «Siguientes…»). The Diccionario's
+/// index; the app calls [`topic_index`], the probes in accuracy_tests.rs this.
+#[cfg(test)]
 pub fn dictionary_index(
     module_path: &str,
     query: Option<&str>,
@@ -2118,11 +2558,24 @@ pub fn dictionary_index(
     before: u32,
     after: u32,
 ) -> Result<IndexSlice, String> {
-    let idx = topic_index_for(module_path)?;
+    topic_index(module_path, query, anchor, before, after, false)
+}
+
+/// [`dictionary_index`] for the Diccionario (`lexicon = false`) or the Léxico (`true`: the
+/// `Lexicon` table first, Strong's rows with their headword, and the Griego/Hebreo starts).
+pub fn topic_index(
+    module_path: &str,
+    query: Option<&str>,
+    anchor: Option<u32>,
+    before: u32,
+    after: u32,
+    lexicon: bool,
+) -> Result<IndexSlice, String> {
+    let idx = topic_index_for(module_path, lexicon)?;
     let total = idx.rows.len() as u32;
     let (focus, exact) = match query.map(str::trim).filter(|q| !q.is_empty()) {
         Some(q) => {
-            let k = index_key(q);
+            let k = index_query_key(q);
             let pos = idx.keys.partition_point(|x| x.as_str() < k.as_str());
             (Some(pos as u32), idx.keys.get(pos).is_some_and(|x| *x == k))
         }
@@ -2131,21 +2584,40 @@ pub fn dictionary_index(
     let center = anchor.or(focus).unwrap_or(0).min(total);
     let start = center.saturating_sub(before.min(INDEX_MAX_WINDOW));
     let end = center.saturating_add(after.min(INDEX_MAX_WINDOW)).min(total);
+    let lemmas = if lexicon { index_lemmas(module_path, &idx, start, end) } else { HashMap::new() };
     let rows = (start..end)
         .map(|p| {
             let (rowid, topic) = &idx.rows[p as usize];
-            IndexRow { pos: p, rowid: *rowid, topic: topic.clone() }
+            IndexRow {
+                pos: p,
+                rowid: *rowid,
+                topic: topic.clone(),
+                lemma: lemmas.get(rowid).cloned().unwrap_or_default(),
+            }
         })
         .collect();
-    Ok(IndexSlice { total, start, focus, exact, rows })
+    Ok(IndexSlice {
+        total,
+        start,
+        focus,
+        exact,
+        rows,
+        strong_keyed: total > 0 && idx.strong_rows.saturating_mul(2) >= total,
+        greek_start: idx.greek_start,
+        hebrew_start: idx.hebrew_start,
+    })
 }
 
 /// One topic's article by its row (a click in the index opens exactly that topic).
+#[cfg(test)]
 pub fn dictionary_entry_by_rowid(module_path: &str, rowid: i64) -> Result<Option<DictEntry>, String> {
+    topic_entry_by_rowid(module_path, rowid, false)
+}
+
+/// [`dictionary_entry_by_rowid`] on the table [`topic_index`] read (`lexicon`).
+pub fn topic_entry_by_rowid(module_path: &str, rowid: i64, lexicon: bool) -> Result<Option<DictEntry>, String> {
     with_slot(module_path, |conn, schema| {
-        let ts = schema
-            .dict
-            .ok_or_else(|| "Este módulo no tiene tabla Dictionary/Lexicon.".to_string())?;
+        let ts = index_table(schema, lexicon)?;
         let topic: String = conn
             .query_row(
                 &format!("SELECT \"{}\" FROM \"{}\" WHERE rowid=?1", ts.topic, ts.table),
@@ -2159,6 +2631,156 @@ pub fn dictionary_entry_by_rowid(module_path: &str, rowid: i64) -> Result<Option
         let def = def_by_rowid(conn, &ts, rowid);
         make_entry(&topic, &def, "exact", "Módulo cifrado (🔒). Use un .lexi/.dcti moderno sin DRM.")
     })
+}
+
+// ─── Devotionals (.devi): one reading per calendar day (ported from the Windows build) ───
+//
+// A single table, unlike the verse-addressed modules: `Devotional(Month, Day, Devotion)`.
+// The Devocional tab opens on today's date, steps day by day, and lists the same day in the
+// folder's other devotionals.
+
+/// One day's reading of a devotional.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DevotionalEntry {
+    pub month: i32,
+    pub day: i32,
+    /// The reading, cleaned like any study text.
+    pub html: String,
+    pub title: String,
+    pub abbreviation: String,
+}
+
+fn devotional_table_ok(conn: &Connection) -> Result<(), String> {
+    if table_exists(conn, "Devotional") {
+        Ok(())
+    } else {
+        Err("Este módulo no tiene tabla Devotional: no es un devocional de e-Sword.".to_string())
+    }
+}
+
+/// The (month, day) pairs a devotional has a reading for, in calendar order.
+pub fn devotional_days(module_path: &str) -> Result<Vec<(i32, i32)>, String> {
+    with_conn(module_path, |conn| {
+        devotional_table_ok(conn)?;
+        let mut st = conn
+            .prepare(
+                "SELECT CAST(Month AS INTEGER) AS m, CAST(Day AS INTEGER) AS d FROM Devotional \
+                 WHERE m BETWEEN 1 AND 12 AND d BETWEEN 1 AND 31 GROUP BY m, d ORDER BY m, d",
+            )
+            .map_err(|e| es_error(&e.to_string()))?;
+        let rows = st
+            .query_map([], |r| Ok((r.get::<_, i32>(0)?, r.get::<_, i32>(1)?)))
+            .map_err(|e| es_error(&e.to_string()))?;
+        Ok(rows.flatten().collect())
+    })
+}
+
+/// The reading for one calendar day, or `None` when the devotional has none for it.
+pub fn devotional_entry(module_path: &str, month: i32, day: i32) -> Result<Option<DevotionalEntry>, String> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return Ok(None);
+    }
+    with_conn(module_path, |conn| {
+        devotional_table_ok(conn)?;
+        let raw: Option<String> = match conn.query_row(
+            "SELECT Devotion FROM Devotional WHERE CAST(Month AS INTEGER)=?1 AND CAST(Day AS INTEGER)=?2 \
+             AND length(Devotion)>0 ORDER BY rowid LIMIT 1",
+            rusqlite::params![month, day],
+            |r| cell_to_string(r, 0),
+        ) {
+            Ok(text) => Some(text),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            // A table without the expected columns, a damaged file: say so, not «no reading».
+            Err(e) => return Err(es_error(&e.to_string())),
+        };
+        let Some(raw) = raw.filter(|t| !t.trim().is_empty()) else {
+            return Ok(None);
+        };
+        if looks_encrypted(&raw) {
+            return Err("Este devocional está cifrado (🔒). Use un módulo .devi moderno sin DRM.".to_string());
+        }
+        let (title, abbreviation, _, _) = read_details(conn);
+        let (html, _) = truncate_entry_html(clean_esword_text(&raw));
+        Ok(Some(DevotionalEntry { month, day, html, title, abbreviation }))
+    })
+}
+
+// ─── «ES» line: a Strong's number's Reina-Valera renderings (ported from Windows) ───
+
+static STRONG_GLOSS_CACHE: Lazy<Mutex<HashMap<(String, String), Option<crate::strong_gloss::StrongGloss>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+const STRONG_GLOSS_CACHE_MAX: usize = 4096;
+/// Modules tried for one number (the page sends its 4 preferred Spanish Strong's dictionaries).
+const STRONG_GLOSS_MAX_SOURCES: usize = 4;
+
+/// Text of cleaned entry HTML, one line per `<br>` (the parser reads line breaks).
+fn entry_lines(html: &str) -> String {
+    html.split("<br>").map(to_plain).collect::<Vec<_>>().join("\n")
+}
+
+/// The Spanish renderings of `code` from the first of `module_paths` that has a readable entry
+/// with a list for it. A module that is missing, unreadable or lacks the entry is skipped; when
+/// none of them could be read at all the answer is an error (the page asks again later) rather
+/// than «no list».
+pub fn strong_gloss(code: &str, module_paths: &[String]) -> Result<Option<crate::strong_gloss::StrongGloss>, String> {
+    let Some(code) = crate::strong_gloss::strong_code(code) else {
+        return Ok(None);
+    };
+    let mut last_err = None;
+    let mut read_any = false;
+    for p in module_paths.iter().take(STRONG_GLOSS_MAX_SOURCES) {
+        match strong_gloss_in(p, &code) {
+            Ok(Some(g)) => return Ok(Some(g)),
+            Ok(None) => read_any = true,
+            Err(e) => last_err = Some(e),
+        }
+    }
+    match last_err {
+        Some(e) if !read_any => Err(e),
+        _ => Ok(None),
+    }
+}
+
+fn strong_gloss_in(path: &str, code: &str) -> Result<Option<crate::strong_gloss::StrongGloss>, String> {
+    let key = (path.to_string(), code.to_string());
+    if let Some(hit) = STRONG_GLOSS_CACHE.lock().get(&key) {
+        return Ok(hit.clone());
+    }
+    let found = with_slot(path, |conn, schema| {
+        let Some(ts) = schema.lex.or(schema.dict) else { return Ok(None) };
+        // Exact topics only, as the modules spell them (G26, G0026, G00026): a prefix match
+        // would hand G260 the words of G26's neighbour.
+        let forms = strong_code_forms(code);
+        let ph = (1..=forms.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
+        let coll = if ts.indexed { "" } else { " COLLATE NOCASE" };
+        let sql = format!("SELECT rowid, \"{c}\" FROM \"{t}\" WHERE \"{c}\"{coll} IN ({ph})", c = ts.topic, t = ts.table);
+        let mut rows = topic_rows(conn, &sql, &forms);
+        rows.sort_by_key(|(rowid, _)| *rowid);
+        let Some((rowid, _)) = rows.first().cloned() else { return Ok(None) };
+        let def = def_by_rowid(conn, &ts, rowid);
+        if def.trim().is_empty() || looks_encrypted(&def) {
+            return Ok(None);
+        }
+        let Some(entry) = crate::strong_gloss::parse_entry(&entry_lines(&clean_esword_text(&def))) else {
+            return Ok(None);
+        };
+        let (title, abbr, _, _) = read_details(conn);
+        Ok(Some(crate::strong_gloss::StrongGloss {
+            code: code.to_string(),
+            spanish: entry.spanish,
+            translit: entry.translit,
+            original: entry.original,
+            source: if abbr.trim().is_empty() { title } else { abbr },
+            module: Path::new(path).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+        }))
+    })?; // not readable now (busy, missing): not remembered
+    let mut cache = STRONG_GLOSS_CACHE.lock();
+    if cache.len() >= STRONG_GLOSS_CACHE_MAX {
+        cache.clear();
+    }
+    cache.insert(key, found.clone());
+    Ok(found)
 }
 
 // ─── Strong bridge: a verb or adjective tap reaches its concept's headword ───
@@ -2855,6 +3477,8 @@ pub fn clear_caches() {
     FALLBACK_CACHE.lock().clear();
     ABBR_CACHE.lock().clear();
     PROSE_CACHE.lock().clear();
+    STRONG_GLOSS_CACHE.lock().clear();
+    TEXT_TITLES_CACHE.lock().clear();
 }
 
 // ─── Module ranking (ISS-13) ───
@@ -3949,13 +4573,23 @@ fn verse_overlap(a: &[VerseTok], b: &[VerseTok], pairs: usize) -> f64 {
     2.0 * pairs as f64 / (a.len() + b.len()) as f64
 }
 
-/// One verse rendered the way `load_bible_chapter` renders it, as tokens.
+/// One verse rendered the way `load_bible_chapter` renders it, as tokens: the verse itself,
+/// without its section titles — the words the page counts for a tap's occurrence.
 fn verse_tokens_of(module_path: &str, book: i32, chapter: i32, verse: i32) -> Option<Vec<VerseTok>> {
+    let raw = load_raw_verse(module_path, book, chapter, verse)?;
+    let text_lines = chapter_text_titles(module_path, book, chapter);
+    let (html, _) = render_bible_verse(&raw, bible_has_own_tags(module_path), text_lines);
+    Some(verse_word_tokens(&html))
+}
+
+/// All the words of one verse's text, section titles included (the twin side of a tap, and
+/// twin detection: «Salmo de David.» is verse text in some editions and a title in others).
+fn verse_tokens_full(module_path: &str, book: i32, chapter: i32, verse: i32) -> Option<Vec<VerseTok>> {
     let raw = load_raw_verse(module_path, book, chapter, verse)?;
     let html = if bible_has_own_tags(module_path) {
         clean_bible_verse_tagged(&raw)
     } else {
-        clean_esword_text(&raw)
+        clean_bible_text(&raw)
     };
     Some(verse_word_tokens(&html))
 }
@@ -4010,7 +4644,7 @@ fn find_tagged_twin(bible_path: &str) -> Option<String> {
     }
     let reading: Vec<Option<Vec<VerseTok>>> = TWIN_PROBES
         .iter()
-        .map(|&(b, c, v)| verse_tokens_of(bible_path, b, c, v).filter(|t| !t.is_empty()))
+        .map(|&(b, c, v)| verse_tokens_full(bible_path, b, c, v).filter(|t| !t.is_empty()))
         .collect();
     if reading.iter().flatten().count() < 3 {
         return None;
@@ -4089,14 +4723,24 @@ fn twin_tags_for_tap(
     if key.is_empty() {
         return None;
     }
-    let reading = verse_tokens_of(bible_path, book, chapter, verse)?;
-    let idx: Vec<usize> = (0..reading.len()).filter(|&i| reading[i].key == key).collect();
-    let i = *idx.get(occurrence.unwrap_or(0)).or(idx.first())?;
+    // The page counts a tap's occurrence among the verse's own words (section titles apart).
+    let body = verse_tokens_of(bible_path, book, chapter, verse)?;
+    let idx: Vec<usize> = (0..body.len()).filter(|&i| body[i].key == key).collect();
+    let (reading, i) = match idx.get(occurrence.unwrap_or(0)).or(idx.first()) {
+        Some(&i) => (body, i),
+        None => {
+            // A word of a section title («Salmo de David.»): its first place in the verse's
+            // whole text, titles included, so the twin still tags it.
+            let full = verse_tokens_full(bible_path, book, chapter, verse)?;
+            let i = full.iter().position(|t| t.key == key)?;
+            (full, i)
+        }
+    };
     if twin == bible_path {
         let own = reading[i].strongs.clone();
         return (!own.is_empty()).then(|| (twin, own));
     }
-    let tagged = verse_tokens_of(&twin, book, chapter, verse)?;
+    let tagged = verse_tokens_full(&twin, book, chapter, verse)?;
     // A whole chapter stored as one "verse" would make the LCS table huge: interlinear instead.
     if reading.len().saturating_mul(tagged.len()) > TWIN_MAX_LCS_CELLS {
         return None;
@@ -4879,6 +5523,9 @@ mod qa_tests;
 
 #[cfg(test)]
 mod accuracy_tests;
+
+#[cfg(test)]
+mod port_tests;
 
 #[cfg(test)]
 mod tests {

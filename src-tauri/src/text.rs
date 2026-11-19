@@ -139,8 +139,10 @@ static RE_RTF_WORD_TEXT: Lazy<Regex> = Lazy::new(|| {
 static RE_RTF_WORD_TOGGLE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\\(i0|i|b0|b)").unwrap());
 static RE_RTF_UNICODE_STRICT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\\u(-?\d{1,6})(?:\\'[0-9a-fA-F]{2}|\?| )?").unwrap());
+/// A headerless RTF group: formatting words, or paragraph alignment (`{\qc \b Título\par}`, the
+/// centred section titles of the RTF Bibles: RV1960 .bblx, BTX3, RV60a, Straubinger).
 static RE_RTF_FRAGMENT_GROUP: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\{\\(?:i|b|ul|cf\d+|f\d+|fs\d+|super|sub|plain|ulnone)[^a-z]").unwrap());
+    Lazy::new(|| Regex::new(r"\{\\(?:i|b|ul|cf\d+|f\d+|fs\d+|super|sub|plain|ulnone|q[clrj]|pard)[^a-z]").unwrap());
 static RE_RTF_GROUP_SIMPLE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\{((?:\\[a-z]{1,32}-?\d{0,10} ?)+)([^{}\\]*)\}").unwrap());
 static RE_RTF_HEADER_WORD: Lazy<Regex> =
@@ -176,6 +178,10 @@ pub struct CleanOptions {
     /// ISS-24 / open product question 7: show «[imagen]» where an embedded `<img>` was.
     /// Default `false` keeps today's behaviour (the image is removed silently).
     pub image_placeholder: bool,
+    /// Skip [`repair_codepage_mojibake`]: Bible text. A Bible's words are tapped by position,
+    /// and OGNTe+ writes the Latin «I» of its transliterations as a Greek capital iota
+    /// («Ιisu», «Ιsaak»), which the repair would read as a damaged «É».
+    pub keep_codepage: bool,
 }
 
 /// One word of a Strong-tagged Bible verse together with its own Strong numbers
@@ -211,6 +217,19 @@ pub fn clean_bible_verse_tagged(raw: &str) -> String {
         raw,
         CleanOptions {
             tagged_words: true,
+            keep_codepage: true,
+            ..CleanOptions::default()
+        },
+    )
+}
+
+/// [`clean_esword_text`] for Bible text: the same cleaning, without the codepage repair
+/// (see [`CleanOptions::keep_codepage`]).
+pub fn clean_bible_text(raw: &str) -> String {
+    clean_esword_text_with(
+        raw,
+        CleanOptions {
+            keep_codepage: true,
             ..CleanOptions::default()
         },
     )
@@ -372,11 +391,218 @@ pub fn clean_esword_text_with(raw: &str, opts: CleanOptions) -> String {
     s = s.replace("\r\n", "\n").replace('\r', "\n");
     // Soft line breaks → <br>
     let lines: Vec<&str> = s.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-    if lines.len() > 1 {
+    let out = if lines.len() > 1 {
         lines.join("<br>")
     } else {
         s.trim().to_string()
+    };
+    if opts.keep_codepage {
+        out
+    } else {
+        repair_codepage_mojibake(out)
     }
+}
+
+// ─── Codepage repair (ported from the Windows build, module-pipeline f578470) ───
+//
+// Some modules were built by decoding Windows-1252 Spanish through the Greek (CP1253) or
+// Hebrew (CP1255) table, so every accented letter ships as the letter at the same byte:
+// «tambiιn», «posiciσn», «Seסor», «Aplicaciףn», «ΏQuι». A sampled scan of this Mac's library
+// (2026-11-18) found it in 20 modules — RAE Ortografía, Frases y principios, Usos y costumbres,
+// Biblia Comentada, Ravasi… — 28 727 letters inside words, 7 379 at a word's end and 2 171 at
+// its start («ιl», «ϊltimo»).
+
+/// The letter a damaged accent stands for: the exact CP1252 byte round-trip (CP1253, CP1255).
+fn unmojibake(c: char) -> Option<char> {
+    Some(match c {
+        // CP1252 byte rendered through CP1253
+        'α' => 'á',
+        'ι' => 'é',
+        'ν' => 'í',
+        'σ' => 'ó',
+        'ϊ' => 'ú',
+        'ρ' => 'ñ',
+        'ό' => 'ü',
+        'Α' => 'Á',
+        'Ι' => 'É',
+        'Ν' => 'Í',
+        'Σ' => 'Ó',
+        'Ϊ' => 'Ú',
+        'Ρ' => 'Ñ',
+        'Ώ' => '¿',
+        '\u{0385}' => '¡',
+        // Romanized Greek in these lexicons spells omega as a macron o; the module shipped it
+        // as tau (kτmē → kōmē, IΤANNOU → IŌANNOU). Like every letter here, only a lone τ that
+        // touches a Latin letter is repaired, so a Greek word's τ is safe.
+        'τ' => 'ō',
+        'Τ' => 'Ō',
+        // CP1252 byte rendered through CP1255
+        '\u{05D1}' => 'á',
+        '\u{05D9}' => 'é',
+        '\u{05DD}' => 'í',
+        '\u{05E3}' => 'ó',
+        '\u{05EA}' => 'ú',
+        '\u{05E1}' => 'ñ',
+        '\u{05B1}' => 'Á',
+        '\u{05B9}' => 'É',
+        '\u{05BD}' => 'Í',
+        '\u{05C3}' => 'Ó',
+        '\u{05C1}' => 'Ñ',
+        _ => return None,
+    })
+}
+
+/// The Latin letter a Greek one is drawn like. A module may type it for that letter at a
+/// word's start («νida» for «vida» in Biblia Comentada): not codepage damage.
+fn latin_lookalike(c: char) -> Option<char> {
+    Some(match c {
+        'Α' => 'a',
+        'Ι' => 'i',
+        'Ν' => 'n',
+        'Ρ' => 'p',
+        'Τ' => 't',
+        'α' => 'a',
+        'ι' => 'i',
+        'ν' => 'v',
+        'ρ' => 'p',
+        _ => return None,
+    })
+}
+
+fn is_latin_letter(c: char) -> bool {
+    c.is_ascii_alphabetic()
+        || matches!(
+            c,
+            'á' | 'é' | 'í' | 'ó' | 'ú' | 'ü' | 'ñ' | 'Á' | 'É' | 'Í' | 'Ó' | 'Ú' | 'Ü' | 'Ñ'
+                | 'à' | 'è' | 'ì' | 'ò' | 'ù' | 'â' | 'ê' | 'î' | 'ô' | 'û' | 'ç' | 'Ç'
+                // Macron vowels of the transliterations lexicons print beside the headword
+                // (kōmē, šālôm).
+                | 'ā' | 'ē' | 'ī' | 'ō' | 'ū' | 'Ā' | 'Ē' | 'Ī' | 'Ō' | 'Ū'
+                | 'š' | 'Š' | 'ḥ' | 'ṣ' | 'ṭ' | 'ĕ' | 'ă' | 'ŏ'
+        )
+}
+
+fn is_greek_char(c: char) -> bool {
+    matches!(c as u32, 0x0370..=0x03FF | 0x1F00..=0x1FFF)
+}
+
+fn is_hebrew_char(c: char) -> bool {
+    matches!(c as u32, 0x0590..=0x05FF)
+}
+
+/// One visible character of cleaned HTML, at byte `at` (`None`: a separator — a `<br>` or an
+/// entity — that is not a letter).
+type Visible = (Option<usize>, char);
+
+/// The visible characters of the cleaner's own output: tags are skipped (inline tags join
+/// their neighbours, `<br>` separates them), an entity is one non-letter. The output only
+/// carries tags the cleaner wrote and text it escaped, so every `<` opens a tag.
+fn visible_chars(html: &str) -> Vec<Visible> {
+    let mut out = Vec::with_capacity(html.len());
+    let mut i = 0;
+    while i < html.len() {
+        let rest = &html[i..];
+        let c = rest.chars().next().unwrap_or(' ');
+        if c == '<' {
+            if let Some(end) = rest.find('>') {
+                if rest.len() > 3 && rest.as_bytes()[1..3].eq_ignore_ascii_case(b"br") {
+                    out.push((None, ' '));
+                }
+                i += end + 1;
+                continue;
+            }
+        } else if c == '&' {
+            if let Some(end) = rest.find(';').filter(|&e| e <= 10) {
+                out.push((None, ' '));
+                i += end + 1;
+                continue;
+            }
+        }
+        out.push((Some(i), c));
+        i += c.len_utf8();
+    }
+    out
+}
+
+/// Repair the accents described on [`unmojibake`] in cleaned display HTML.
+///
+/// Only a *lone* Greek/Hebrew letter touching a Latin word is repaired: a run of two or more
+/// is genuine Greek or Hebrew (`ἄλφα`, `אָב`) and never touched, so real headwords survive. At
+/// a word's start a letter drawn like a Latin one is left alone when the same text also has
+/// the word spelled with that Latin letter («νida» beside «vida»).
+fn repair_codepage_mojibake(html: String) -> String {
+    // Every repaired character is Greek (U+0370–03FF) or Hebrew (U+0590–05FF): UTF-8 lead
+    // bytes 0xCD..=0xD7. A byte scan rejects almost every text without decoding a char.
+    if !html.as_bytes().iter().any(|b| (0xCD..=0xD7).contains(b)) {
+        return html;
+    }
+    if !html.chars().any(|c| unmojibake(c).is_some()) {
+        return html;
+    }
+    let vis = visible_chars(&html);
+    let mut vocab: Option<std::collections::HashSet<String>> = None;
+    let mut fixes: Vec<(usize, char, char)> = Vec::new();
+    for (k, &(at, c)) in vis.iter().enumerate() {
+        let (Some(at), Some(fixed)) = (at, unmojibake(c)) else {
+            continue;
+        };
+        let prev = if k > 0 { vis[k - 1].1 } else { ' ' };
+        let next = vis.get(k + 1).map_or(' ', |v| v.1);
+        let same_script = |x: char| if is_greek_char(c) { is_greek_char(x) } else { is_hebrew_char(x) };
+        if same_script(prev) || same_script(next) {
+            continue;
+        }
+        let (latin_before, latin_after) = (is_latin_letter(prev), is_latin_letter(next));
+        if !latin_before && !latin_after {
+            continue;
+        }
+        if !latin_before {
+            if let Some(look) = latin_lookalike(c) {
+                let mut word = String::from(look);
+                word.extend(
+                    vis[k + 1..]
+                        .iter()
+                        .map(|v| v.1)
+                        .take_while(|&x| is_latin_letter(x))
+                        .flat_map(char::to_lowercase),
+                );
+                let vocab = vocab.get_or_insert_with(|| latin_words(&vis));
+                if vocab.contains(&word) {
+                    continue;
+                }
+            }
+        }
+        fixes.push((at, c, fixed));
+    }
+    if fixes.is_empty() {
+        return html;
+    }
+    let mut out = String::with_capacity(html.len());
+    let mut last = 0;
+    for (at, c, fixed) in fixes {
+        out.push_str(&html[last..at]);
+        out.push(fixed);
+        last = at + c.len_utf8();
+    }
+    out.push_str(&html[last..]);
+    out
+}
+
+/// The lower-case Latin words of a text (for the look-alike check).
+fn latin_words(vis: &[Visible]) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    let mut cur = String::new();
+    for &(_, c) in vis {
+        if is_latin_letter(c) {
+            cur.extend(c.to_lowercase());
+        } else if !cur.is_empty() {
+            set.insert(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        set.insert(cur);
+    }
+    set
 }
 
 /// One separator between cells: empty cells collapse, none at the start or end of a row.
@@ -1114,3 +1340,5 @@ mod golden_tests;
 mod gate_tests;
 #[cfg(test)]
 mod qa_tests;
+#[cfg(test)]
+mod codepage_tests;

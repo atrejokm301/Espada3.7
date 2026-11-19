@@ -801,7 +801,8 @@ function loadFixture(name) {
   H.fixture = txt ? JSON.parse(txt) : { signatures: null, responses: {} };
   H.fixtureName = name;
 }
-var OPTIONAL_CMDS = new Set(["dictionary_index", "get_dictionary_entry"]);
+// Newer than every recorded backend (2026-11-18: the «ES» line from the Windows build).
+var OPTIONAL_CMDS = new Set(["dictionary_index", "get_dictionary_entry", "strong_gloss", "list_devotional_days", "get_devotional"]);
 var UI_ONLY = {
   set_frosted_window: () => ({ ok: "frost-ok" }),
   pick_modules_dir: () => ({ ok: null }),

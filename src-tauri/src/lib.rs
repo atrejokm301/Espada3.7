@@ -1,7 +1,10 @@
+mod bible_titles;
 mod books;
 mod conjugation;
 mod crossrefs;
 mod modules;
+mod sections;
+mod strong_gloss;
 mod text;
 
 /// Representative workload for instrumentation PGO / AutoFDO-style training runs.
@@ -615,17 +618,13 @@ async fn get_commentary(
     chapter: i32,
     verse: i32,
     filters: CommentaryFilters,
+    sections: Option<bool>,
 ) -> Result<Vec<StudyEntry>, String> {
     blocking(move || {
-        load_commentary(
-            &module_path,
-            book,
-            chapter,
-            verse,
-            filters.verse,
-            filters.chapter,
-            filters.book,
-        )
+        // `sections`: the main panel — the module's section titles (Catena Aurea's Fathers…).
+        modules::with_section_titles(&module_path, sections.unwrap_or(false), || {
+            load_commentary(&module_path, book, chapter, verse, filters.verse, filters.chapter, filters.book)
+        })
     })
     .await?
 }
@@ -639,21 +638,26 @@ async fn lookup_dictionary(
     limit: Option<i32>,
     strongs: Option<Vec<String>>,
     lex_paths: Option<Vec<String>>,
+    sections: Option<bool>,
 ) -> Result<Vec<DictEntry>, String> {
     blocking(move || {
         let strongs: Vec<String> = strongs.unwrap_or_default().into_iter().take(2).collect();
         let lex_paths = lex_paths.unwrap_or_default();
-        if strongs.is_empty() || lex_paths.is_empty() {
-            dictionary_lookup(&module_path, &query, limit.unwrap_or(30))
-        } else {
-            modules::dictionary_lookup_bridged(&module_path, &query, limit.unwrap_or(30), &strongs, &lex_paths)
-        }
+        modules::with_section_titles(&module_path, sections.unwrap_or(false), || {
+            if strongs.is_empty() || lex_paths.is_empty() {
+                dictionary_lookup(&module_path, &query, limit.unwrap_or(30))
+            } else {
+                modules::dictionary_lookup_bridged(&module_path, &query, limit.unwrap_or(30), &strongs, &lex_paths)
+            }
+        })
     })
     .await?
 }
 
 /// e-Sword style topic index of a dictionary: a window of its alphabetical topic list around
 /// `query` (or `anchor`), with where the query is (`focus`) and whether it is a topic (`exact`).
+/// `lexicon` (the Léxico tab): the `Lexicon` table first, Strong's rows with their headword
+/// and the Griego/Hebreo starts. Absent = the Diccionario's index, as before.
 #[tauri::command]
 async fn dictionary_index(
     module_path: String,
@@ -661,22 +665,63 @@ async fn dictionary_index(
     anchor: Option<u32>,
     before: Option<u32>,
     after: Option<u32>,
+    lexicon: Option<bool>,
 ) -> Result<modules::IndexSlice, String> {
     blocking(move || {
-        modules::dictionary_index(&module_path, query.as_deref(), anchor, before.unwrap_or(40), after.unwrap_or(80))
+        modules::topic_index(
+            &module_path,
+            query.as_deref(),
+            anchor,
+            before.unwrap_or(40),
+            after.unwrap_or(80),
+            lexicon.unwrap_or(false),
+        )
     })
     .await?
 }
 
-/// The article of one index row (exactly that topic).
+/// Devocional: the (month, day) pairs a devotional (.devi) has a reading for.
 #[tauri::command]
-async fn get_dictionary_entry(module_path: String, rowid: i64) -> Result<Option<DictEntry>, String> {
-    blocking(move || modules::dictionary_entry_by_rowid(&module_path, rowid)).await?
+async fn list_devotional_days(module_path: String) -> Result<Vec<(i32, i32)>, String> {
+    blocking(move || modules::devotional_days(&module_path)).await?
+}
+
+/// Devocional: one day's reading (`None` when the devotional has none for that day).
+#[tauri::command]
+async fn get_devotional(module_path: String, month: i32, day: i32) -> Result<Option<modules::DevotionalEntry>, String> {
+    blocking(move || modules::devotional_entry(&module_path, month, day)).await?
+}
+
+/// «ES» line of the Léxico: the Reina-Valera renderings a Spanish Strong's dictionary gives for
+/// `code` («G26» → «ágape, amado, amor»), from the first of `module_paths` (at most 4: the page
+/// sends the Spanish Strong's dictionaries, its preferred one first) that has them.
+#[tauri::command]
+async fn strong_gloss(code: String, module_paths: Vec<String>) -> Result<Option<strong_gloss::StrongGloss>, String> {
+    blocking(move || modules::strong_gloss(&code, &module_paths)).await?
+}
+
+/// The article of one index row (exactly that topic), from the table its index read.
+#[tauri::command]
+async fn get_dictionary_entry(
+    module_path: String,
+    rowid: i64,
+    lexicon: Option<bool>,
+    sections: Option<bool>,
+) -> Result<Option<DictEntry>, String> {
+    blocking(move || {
+        modules::with_section_titles(&module_path, sections.unwrap_or(false), || {
+            modules::topic_entry_by_rowid(&module_path, rowid, lexicon.unwrap_or(false))
+        })
+    })
+    .await?
 }
 
 #[tauri::command]
-async fn lookup_lexicon(module_path: String, strong: String) -> Result<Option<DictEntry>, String> {
-    blocking(move || lexicon_lookup(&module_path, &strong)).await?
+async fn lookup_lexicon(module_path: String, strong: String, sections: Option<bool>) -> Result<Option<DictEntry>, String> {
+    blocking(move || {
+        modules::with_section_titles(&module_path, sections.unwrap_or(false), || lexicon_lookup(&module_path, &strong))
+    })
+    .await?
 }
 
 fn lexicon_multi(module_paths: Vec<String>, strong: &str) -> Result<Option<DictEntry>, String> {
@@ -1010,6 +1055,9 @@ pub fn run() {
             lookup_dictionary,
             dictionary_index,
             get_dictionary_entry,
+            strong_gloss,
+            list_devotional_days,
+            get_devotional,
             lookup_lexicon,
             lookup_lexicon_multi,
             lookup_reference,
@@ -1477,10 +1525,11 @@ mod wp5_tests {
                             3,
                             16,
                             CommentaryFilters { verse: true, chapter: false, book: false },
+                            None,
                         )
                         .await
                         .unwrap();
-                        let l = lookup_lexicon(lex, "G26".into()).await.unwrap();
+                        let l = lookup_lexicon(lex, "G26".into(), None).await.unwrap();
                         (i, json(&r), json(&c), l.is_some())
                     })
                 })

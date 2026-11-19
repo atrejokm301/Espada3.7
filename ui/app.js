@@ -92,7 +92,10 @@ const state = {
     comentario: "",
     diccionario: "",
     lexico: "",
+    devocional: "",
   },
+  /** Devocional: the day shown ({ month, day }); null = today, set when the tab first opens. */
+  devDate: null,
   /** Preferred cross-reference source path (OpenBible SQLite or TSK .cmti) */
   crossRefSourcePath: "",
   /** The user picked that source (an automatic default is not remembered as a choice) */
@@ -139,6 +142,8 @@ const state = {
   dictIndexSeq: 0,
   /** A topic opened from the index ({module, rowid, topic}); null = the word's results */
   dictBrowse: null,
+  /** «ES» line: first source + code → Strong's renderings (or null). */
+  glossCache: new Map(),
   /** Debounce of the index jump while typing in «Buscar…» */
   dictIndexTimer: 0,
   /** Debounce of opening the topic reached with ↑/↓ (its own timer: typing never cancels it) */
@@ -567,7 +572,8 @@ function primaryFirst(codes) {
  * interlinear it is aligned with has no titles), and the Strong numbers the Bible stores on it.
  */
 function tapContext(wordEl) {
-  const scope = wordEl.closest(".verse");
+  // A section title above a verse is that verse's (its .vtitles block carries the number).
+  const scope = wordEl.closest(".verse, .vtitles");
   const verse = Number(scope?.dataset.verse || wordEl.closest("tr")?.dataset.verse || state.verse);
   const key = normalizeLoose(cleanQueryWord(wordEl.textContent));
   let occurrence = 0;
@@ -931,7 +937,7 @@ function updateBibleTitleTooltip() {
 // The module a study tab renders with is chosen synchronously (saved choice, else a
 // fallback that is never persisted). The content probe only annotates and re-sorts the
 // dropdown; it can switch an automatic pick to one with content, never a user's choice.
-const STUDY_KIND = { comentario: "commentary", diccionario: "dictionary", lexico: "lexicon" };
+const STUDY_KIND = { comentario: "commentary", diccionario: "dictionary", lexico: "lexicon", devocional: "devotional" };
 const LEXICON_EXTRA_RE = /strong|lexic|vine|thayer|bdb|hebrew|hebreo|griego|greek/i;
 const PROBE_CACHE_MAX = 50;
 /** How long a first Diccionario render waits for the content probe before using the sync pick. */
@@ -1097,7 +1103,7 @@ function selectStudyModuleSync(ws = state.workspace) {
  */
 function studyProbe(ws = state.workspace) {
   const kind = STUDY_KIND[ws];
-  if (!kind) return Promise.resolve(null);
+  if (!kind || kind === "devotional") return Promise.resolve(null); // one reading per day: nothing to probe
   const list = studyCandidates(ws);
   if (!list.length) return Promise.resolve(null);
   const query = studyProbeQuery(ws);
@@ -1174,6 +1180,8 @@ function setWorkspace(ws, { skipReload = false } = {}) {
   $("#study-chrome").classList.toggle("hidden", isBible);
   $("#commentary-filters").classList.toggle("hidden", ws !== "comentario");
   $("#verse-stepper")?.classList.toggle("hidden", ws !== "comentario");
+  $("#dev-stepper")?.classList.toggle("hidden", ws !== "devocional");
+  if (ws === "devocional") updateDevStepper();
   $("#dict-search-row").classList.toggle(
     "hidden",
     ws !== "diccionario" && ws !== "lexico"
@@ -1229,11 +1237,17 @@ function updateAnalysisChrome() {
     title.textContent = "Otros léxicos";
     hint.innerHTML =
       "El centro es el léxico principal. Aquí, <strong>otros</strong> Strong/lemas del mismo término.";
+  } else if (state.workspace === "devocional") {
+    title.textContent = "Otros devocionales";
+    hint.innerHTML =
+      "El centro es el devocional elegido arriba. Aquí, <strong>otros</strong> devocionales de la carpeta para el mismo día.";
   }
   const label =
     state.workspace === "comentario"
       ? `${bookAbbr(state.book)} ${state.chapter}:${state.verse}`
-      : state.selectedWord || state.lastStrong || "";
+      : state.workspace === "devocional"
+        ? devLabel()
+        : state.selectedWord || state.lastStrong || "";
   if (qbox) {
     if (label) {
       qbox.classList.remove("hidden");
@@ -1483,6 +1497,10 @@ async function refreshAnalysisPane() {
 
   if (ws === "comentario") {
     await refreshCommentaryPane(box, primary);
+    return;
+  }
+  if (ws === "devocional") {
+    renderDevotionalPane(box, primary);
     return;
   }
 
@@ -1956,20 +1974,52 @@ async function reloadChapter() {
   if (notes) notes.value = state.notes[noteKey()] || "";
 }
 
+// —— Section titles in Bible text (2026-11-18, ported from the Windows build) ——
+// The backend cuts a verse's section titles out of its text (bible_titles.rs) and sends them
+// beside it: `lead` / `minor` titles are drawn above their verse; a `next` title (stored at the
+// end of the verse before, RV1960-T) above the verse after it — after the chapter's last verse
+// when it is the last one. Title words are tappable like verse words (psalm titles are
+// Scripture) but never counted in a tap's occurrence (tapContext skips .vtitle).
+const RE_PARALLEL_PASSAGE = /^\([^()]{1,60}\)$/;
+const verseTitles = (v) => (Array.isArray(v && v.titles) ? v.titles : []);
+const titlePlain = (html) => String(html || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
+
+/** One title line: lead titles tokenized (tappable), next titles as their text. */
+function titleLineHtml(t) {
+  const plain = titlePlain(t.html);
+  const minor = t.kind === "minor" || RE_PARALLEL_PASSAGE.test(plain);
+  const cls = `vtitle${minor ? " minor" : ""}${t.kind === "next" ? " next" : ""}`;
+  const body = t.kind === "next" ? t.html : tokenizeWords(t.html);
+  return `<div class="${cls}" role="heading" aria-level="3">${body}</div>`;
+}
+
+/** The headings above verse `vn`: the verse before's `next` titles, then its own. */
+function titlesBlockHtml(lines, data, vn) {
+  if (!lines.length) return "";
+  return `<div class="vtitles" data-verse="${vn}" data-book="${data.book}" data-chapter="${data.chapter}">${lines.join("")}</div>`;
+}
+
 function renderReading(root, data) {
   if (!data.verses?.length) {
     root.innerHTML = `<div class="empty-state">Capítulo vacío o no disponible en este módulo.</div>`;
     return;
   }
-  root.innerHTML = data.verses
+  let pendingNext = [];
+  let html = data.verses
     .map((v, idx) => {
       const body = tokenizeWords(v.html);
       const first = idx === 0 ? " first-verse" : "";
-      return `<p class="verse${first}" data-verse="${v.verse}" data-book="${data.book}" data-chapter="${data.chapter}">
+      const titles = verseTitles(v);
+      const heads = pendingNext.concat(titles.filter((t) => t.kind !== "next").map(titleLineHtml));
+      pendingNext = titles.filter((t) => t.kind === "next").map(titleLineHtml);
+      return `${titlesBlockHtml(heads, data, v.verse)}<p class="verse${first}" data-verse="${v.verse}" data-book="${data.book}" data-chapter="${data.chapter}">
         <sup class="verse-num" data-verse="${v.verse}">${v.verse}</sup><span class="verse-body">${body}</span>
       </p>`;
     })
     .join("");
+  // A title the last verse carries for the next chapter: shown at the end, not hidden.
+  if (pendingNext.length) html += titlesBlockHtml(pendingNext, data, data.verses[data.verses.length - 1].verse);
+  root.innerHTML = html;
   $$(".verse", root).forEach((el) => {
     applyMarksToVerseEl(el, data.book, data.chapter, Number(el.dataset.verse));
   });
@@ -2010,8 +2060,13 @@ async function renderParallel(root, isCurrent = () => true) {
     const cells = maps
       .map((m, i) => {
         const v = m.get(vn);
+        // Paralela: each module's own titles inside its cell (before the verse, or after it for
+        // a `next` title, where that module stores it).
+        const t = verseTitles(v);
+        const top = t.filter((x) => x.kind !== "next").map(titleLineHtml).join("");
+        const end = t.filter((x) => x.kind === "next").map(titleLineHtml).join("");
         return `<td class="verse" data-verse="${vn}" data-module="${escapeAttr(colPaths[i])}">${
-          v ? `<span class="verse-body">${tokenizeWords(v.html)}</span>` : "—"
+          v ? `${top}<span class="verse-body">${tokenizeWords(v.html)}</span>${end}` : "—"
         }</td>`;
       })
       .join("");
@@ -2558,6 +2613,7 @@ function studyRenderKey(ws, module) {
       : ws === "diccionario"
         ? state.selectedWord || ""
         : "";
+  if (ws === "devocional") return `${ws}|${module}|${devLabel()}`;
   return `${ws}|${module}|${q}|${state.book}:${state.chapter}:${state.verse}|${f.verse ? 1 : 0}${f.chapter ? 1 : 0}${f.book ? 1 : 0}`;
 }
 function setStudyRefreshing(content, on) {
@@ -2590,11 +2646,19 @@ async function loadStudyView() {
     module = selectStudyModuleSync(ws);
   }
 
-  if (ws !== "diccionario" || !module) showDictIndex(false);
+  if ((ws !== "diccionario" && ws !== "lexico") || !module) showDictIndex(false);
+  // Never another tab's (or module's) index while this one loads, nor after it fails.
+  else if (state.dictIndex && (state.dictIndex.module !== module || state.dictIndex.lexicon !== (ws === "lexico"))) {
+    showDictIndex(false);
+  }
   if (!module) {
     setStudyRefreshing(content, false);
     state.renderedKey = "";
-    content.innerHTML = `<div class="empty-state soft">No hay módulos de este tipo en la carpeta.</div>`;
+    content.innerHTML =
+      ws === "devocional"
+        ? `<div class="empty-state soft">No hay devocionales en la carpeta de módulos.<br/>Los devocionales de e-Sword (<strong>.devi</strong>) traen una lectura para cada día del año: cópielos a la carpeta y use «Actualizar lista de módulos» en ⚙ Ajustes.</div>`
+        : `<div class="empty-state soft">No hay módulos de este tipo en la carpeta.</div>`;
+    if (ws === "devocional") await refreshAnalysisPane();
     return;
   }
 
@@ -2614,6 +2678,8 @@ async function loadStudyView() {
       await renderDictionaryView(content, module, isCurrent);
     } else if (ws === "lexico") {
       await renderLexiconView(content, module, isCurrent);
+    } else if (ws === "devocional") {
+      await renderDevotionalView(content, module, isCurrent);
     }
   } catch (e) {
     if (isCurrent()) renderError(content, e, module);
@@ -2623,6 +2689,105 @@ async function loadStudyView() {
   state.renderedKey = studyRenderKey(ws, module);
   // Rendered first; the probe only annotates the dropdown afterwards.
   fillStudyModuleSelect(ws);
+}
+
+// —— Devocional (.devi), 2026-11-18, ported from the Windows build ——
+// One reading per calendar day. Opens on today's date; ‹ › (or ← →) step a day, «Hoy» comes
+// back; the right pane lists the folder's other devotionals for the same day.
+const MONTHS_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+/** Days per month; February has 29 because devotionals carry a reading for the 29th. */
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function todayMonthDay() {
+  const now = new Date();
+  return { month: now.getMonth() + 1, day: now.getDate() };
+}
+function devDate() {
+  if (!state.devDate) state.devDate = todayMonthDay();
+  return state.devDate;
+}
+function devLabel(d = devDate()) {
+  return `${d.day} de ${MONTHS_ES[d.month - 1]}`;
+}
+function updateDevStepper() {
+  const label = $("#dev-stepper-label");
+  if (label) label.textContent = devLabel();
+  const today = todayMonthDay();
+  const d = devDate();
+  const todayBtn = $("#btn-dev-today");
+  if (todayBtn) todayBtn.disabled = d.month === today.month && d.day === today.day;
+}
+/** One day forward or back, across months and the year's end. */
+function stepDevotionalDay(delta) {
+  let { month, day } = devDate();
+  day += delta;
+  if (day < 1) {
+    month = month === 1 ? 12 : month - 1;
+    day = DAYS_IN_MONTH[month - 1];
+  } else if (day > DAYS_IN_MONTH[month - 1]) {
+    month = month === 12 ? 1 : month + 1;
+    day = 1;
+  }
+  setDevotionalDate({ month, day });
+}
+function setDevotionalDate(d) {
+  state.devDate = { month: d.month, day: d.day };
+  updateDevStepper();
+  updateAnalysisChrome();
+  if (state.workspace === "devocional") loadStudyView();
+}
+
+async function renderDevotionalView(content, module, isCurrent = () => true) {
+  const d = devDate();
+  const label = devLabel(d);
+  updateDevStepper();
+  const abbr = state.modules.find((m) => m.path === module)?.abbreviation || "";
+  let entry = null;
+  let err = null;
+  try {
+    entry = await invoke("get_devotional", { modulePath: module, month: d.month, day: d.day });
+  } catch (e) {
+    err = e;
+  }
+  if (!isCurrent()) return;
+  let html = `<div class="study-banner">Devocional · ${escapeHtml(abbr)} · ${escapeHtml(label)}</div>`;
+  if (err) html += errorHtml(err, module);
+  else if (!entry) html += `<div class="empty-state soft">Este devocional no tiene lectura para el ${escapeHtml(label)}. Use ‹ › para otro día o elija otro devocional.</div>`;
+  else
+    html += `
+      <article class="study-entry devotional-entry">
+        <div class="topic">${escapeHtml(label)}</div>
+        <div class="study-body">${linkifyHtml(entry.html, { book: state.book, chapter: state.chapter })}</div>
+      </article>`;
+  content.innerHTML = html;
+  normalizeBibleRefElements(content);
+  content.scrollTop = 0;
+  await refreshAnalysisPane();
+}
+
+/** Right pane: the folder's other devotionals for the same day (a click makes one primary). */
+function renderDevotionalPane(box, primary) {
+  const all = modulesOf("devotional");
+  if (!all.length) {
+    box.innerHTML = `<div class="empty-state soft">Cuando agregue devocionales (.devi) a la carpeta de módulos, aquí aparecerán los demás para el mismo día.</div>`;
+    return;
+  }
+  const others = all.filter((m) => m.path !== primary);
+  if (!others.length) {
+    box.innerHTML = `<div class="empty-state soft">No hay otros devocionales en la carpeta.</div>`;
+    return;
+  }
+  box.innerHTML =
+    `<div class="ctx-section-title">Mismo día · ${escapeHtml(devLabel())}</div>` +
+    others
+      .map(
+        (m) => `
+      <button type="button" class="mini-entry dev-other" data-kind="dev" data-path="${escapeAttr(m.path)}" title="${escapeAttr(m.title || m.filename || "")}">
+        <div class="mini-meta">${m.encrypted ? "🔒 " : ""}${escapeHtml(m.abbreviation || m.filename || "")}</div>
+        <div class="mini-body">${escapeHtml(m.title || "")}</div>
+      </button>`
+      )
+      .join("");
 }
 
 // ISS-27: the label already says the scope in Spanish («v.16», «Cap. 3», «Libro»).
@@ -2670,12 +2835,15 @@ async function renderCommentaryView(content, module, isCurrent = () => true) {
   const at = { book: state.book, chapter: state.chapter, verse: state.verse };
   const f = Object.assign({}, state.filters);
   const versePromise = versePlainFor(at);
+  // `sections`: the main panel shows the module's section titles (Catena's Fathers…); the side
+  // pane, probes and tooltips never ask (learning them reads a sample of the module once).
   let entries = await invoke("get_commentary", {
     modulePath: module,
     book: at.book,
     chapter: at.chapter,
     verse: at.verse,
     filters: state.filters,
+    sections: true,
   });
   if (!isCurrent()) return;
   // ISS-16 (user decision): no note for this verse → this module's chapter commentary, labelled.
@@ -2689,6 +2857,7 @@ async function renderCommentaryView(content, module, isCurrent = () => true) {
       chapter: at.chapter,
       verse: at.verse,
       filters: CHAPTER_ONLY,
+      sections: true,
     }).catch(() => []);
     if (!isCurrent()) return;
     if (chapterEntries && chapterEntries.length) {
@@ -2750,11 +2919,12 @@ function strongBridgeNote(e, wl) {
 const isShownDictEntry = (e) =>
   !EXCLUDED_DICT_MATCH_KINDS.has(String(fieldOf(e, "matchKind", "match_kind") || "").toLowerCase());
 
-// —— Diccionario topic index, e-Sword style (user choice 2026-11-11) ——
+// —— Topic index, e-Sword style (Diccionario 2026-11-11; Léxico 2026-11-18, from Windows) ——
 // Beside the article, the module's topics in Spanish alphabetical order: a tap jumps to the
 // exact topic or marks where the word would go («▸ pierda»); any topic opens with a click or
 // the arrow keys. Big modules (24 000 topics) come in windows; «Anteriores…»/«Siguientes…»
-// and scrolling near an edge load more.
+// and scrolling near an edge load more. In the Léxico, Strong's rows show their Greek/Hebrew
+// headword («G26 ἀγάπη») and «Griego» / «Hebreo» jump to where each testament's codes start.
 const DICT_INDEX_BEFORE = 40;
 const DICT_INDEX_AFTER = 80;
 const DICT_INDEX_PAGE = 120;
@@ -2766,23 +2936,37 @@ function showDictIndex(on) {
   if (!nav || !view) return;
   nav.classList.toggle("hidden", !on);
   view.classList.toggle("has-index", !!on);
-  if (!on) state.dictIndex = null;
+  if (!on) {
+    state.dictIndex = null;
+    nav.innerHTML = ""; // its rows must never come back on screen (or be clicked) for another index
+  }
+}
+
+/** The index request for `module` (`lexicon`: the Léxico's, which reads the Lexicon table). */
+function dictIndexArgs(module, lexicon, args) {
+  const a = { modulePath: module, ...args };
+  if (lexicon) a.lexicon = true;
+  return a;
 }
 
 /** Load the window of `module`'s topic index around `query` and paint it. */
-async function renderDictIndex(module, query, isCurrent = () => true) {
+async function renderDictIndex(module, query, isCurrent = () => true, lexicon = false) {
   const nav = $("#dict-index");
   if (!nav || !module) return;
+  // Another module's or tab's index is never shown while this one loads.
+  const ix0 = state.dictIndex;
+  if (!ix0 || ix0.module !== module || ix0.lexicon !== !!lexicon) {
+    state.dictIndex = null;
+    nav.innerHTML = `<div class="dict-index-head">Índice</div><div class="empty-state soft">Cargando…</div>`;
+  }
   showDictIndex(true);
   const seq = ++state.dictIndexSeq;
   let slice = null;
   try {
-    slice = await invoke("dictionary_index", {
-      modulePath: module,
-      query: query || null,
-      before: DICT_INDEX_BEFORE,
-      after: DICT_INDEX_AFTER,
-    });
+    slice = await invoke(
+      "dictionary_index",
+      dictIndexArgs(module, lexicon, { query: query || null, before: DICT_INDEX_BEFORE, after: DICT_INDEX_AFTER })
+    );
   } catch (e) {
     if (seq !== state.dictIndexSeq || !isCurrent()) return;
     state.dictIndex = null;
@@ -2797,16 +2981,30 @@ async function renderDictIndex(module, query, isCurrent = () => true) {
   }
   state.dictIndex = {
     module,
+    lexicon: !!lexicon,
     query: query || "",
     total: slice.total || 0,
     start: slice.start || 0,
     focus: slice.focus ?? null,
     exact: !!slice.exact,
     rows: slice.rows || [],
-    selected: state.dictBrowse && state.dictBrowse.module === module ? state.dictBrowse.rowid : null,
+    strongKeyed: !!slice.strongKeyed,
+    greekStart: slice.greekStart ?? null,
+    hebrewStart: slice.hebrewStart ?? null,
+    selected:
+      state.dictBrowse && state.dictBrowse.module === module && state.dictBrowse.ws === state.workspace
+        ? state.dictBrowse.rowid
+        : null,
     loading: false,
   };
   paintDictIndex({ scrollTo: "focus" });
+}
+
+/** One index row: the topic, and in the Léxico a Strong's row's headword («G26 ἀγάπη»). */
+function dictIndexRowHtml(r, isFocus, selected) {
+  const lemma = r.lemma ? ` <bdi class="dict-index-lemma" dir="auto">${escapeHtml(r.lemma)}</bdi>` : "";
+  const tip = r.lemma ? `${r.topic} ${r.lemma}` : r.topic;
+  return `<button type="button" class="dict-index-row${isFocus ? " focus" : ""}" role="option" aria-selected="${selected}" data-rowid="${r.rowid}" data-pos="${r.pos}" data-topic="${escapeAttr(r.topic)}" title="${escapeAttr(tip)}">${escapeHtml(r.topic)}${lemma}</button>`;
 }
 
 const dictIndexMarker = (q) =>
@@ -2819,14 +3017,22 @@ function paintDictIndex({ scrollTo = "" } = {}) {
   const end = ix.start + ix.rows.length;
   const marker = !ix.exact && ix.query && ix.focus != null;
   // Header outside the scrolling part: nothing slides under it, whatever the theme's background.
-  let html = `<div class="dict-index-head">Índice · ${Number(ix.total).toLocaleString("es")} temas</div><div class="dict-index-scroll">`;
+  let html = `<div class="dict-index-head">Índice · ${Number(ix.total).toLocaleString("es")} temas</div>`;
+  // Léxico: jump to where the Greek (G…) or Hebrew (H…) codes start.
+  if (ix.lexicon && ix.strongKeyed && ix.greekStart != null && ix.hebrewStart != null) {
+    html += `<div class="dict-index-jumps" role="group" aria-label="Ir a">
+      <button type="button" class="dict-index-jump" data-jump="greek" title="Ir a los números griegos (G…)">Griego</button>
+      <button type="button" class="dict-index-jump" data-jump="hebrew" title="Ir a los números hebreos (H…)">Hebreo</button>
+    </div>`;
+  }
+  html += `<div class="dict-index-scroll">`;
   if (ix.start > 0) html += `<button type="button" class="dict-index-more" data-dir="prev">▲ Anteriores…</button>`;
-  html += `<div class="dict-index-list" role="listbox" aria-label="Temas del diccionario">`;
+  html += `<div class="dict-index-list" role="listbox" aria-label="${ix.lexicon ? "Temas del léxico" : "Temas del diccionario"}">`;
   for (const r of ix.rows) {
     if (marker && r.pos === ix.focus) html += dictIndexMarker(ix.query);
     const isFocus = ix.exact && r.pos === ix.focus;
     const selected = ix.selected != null ? r.rowid === ix.selected : isFocus;
-    html += `<button type="button" class="dict-index-row${isFocus ? " focus" : ""}" role="option" aria-selected="${selected}" data-rowid="${r.rowid}" data-pos="${r.pos}" title="${escapeAttr(r.topic)}">${escapeHtml(r.topic)}</button>`;
+    html += dictIndexRowHtml(r, isFocus, selected);
   }
   if (marker && ix.focus >= end && end === ix.total) html += dictIndexMarker(ix.query);
   html += `</div>`;
@@ -2857,13 +3063,10 @@ async function loadMoreDictIndex(dir) {
   const seq = ++state.dictIndexSeq;
   let slice = null;
   try {
-    slice = await invoke("dictionary_index", {
-      modulePath: ix.module,
-      query: ix.query || null,
-      anchor,
-      before: 0,
-      after: DICT_INDEX_PAGE,
-    });
+    slice = await invoke(
+      "dictionary_index",
+      dictIndexArgs(ix.module, ix.lexicon, { query: ix.query || null, anchor, before: 0, after: DICT_INDEX_PAGE })
+    );
   } catch (_) {
     slice = null;
   }
@@ -2892,6 +3095,33 @@ async function loadMoreDictIndex(dir) {
   }
 }
 
+/** Léxico «Griego» / «Hebreo»: a fresh window from where that testament's codes start. */
+async function jumpDictIndex(which) {
+  const ix = state.dictIndex;
+  if (!ix || ix.loading) return;
+  const anchor = which === "hebrew" ? ix.hebrewStart : ix.greekStart;
+  if (anchor == null) return;
+  ix.loading = true;
+  const seq = ++state.dictIndexSeq;
+  let slice = null;
+  try {
+    slice = await invoke(
+      "dictionary_index",
+      dictIndexArgs(ix.module, ix.lexicon, { query: null, anchor, before: 0, after: DICT_INDEX_AFTER })
+    );
+  } catch (_) {
+    slice = null;
+  }
+  ix.loading = false;
+  if (seq !== state.dictIndexSeq || state.dictIndex !== ix || !slice) return;
+  ix.rows = slice.rows || [];
+  ix.start = slice.start || 0;
+  ix.query = ""; // a jump is not a search: no «▸» marker
+  ix.focus = null;
+  ix.exact = false;
+  paintDictIndex({ scrollTo: String(anchor) });
+}
+
 function onDictIndexScroll() {
   const box = $("#dict-index .dict-index-scroll");
   const ix = state.dictIndex;
@@ -2906,8 +3136,13 @@ async function onDictIndexClick(e) {
     await loadMoreDictIndex(more.dataset.dir);
     return;
   }
+  const jump = e.target.closest(".dict-index-jump");
+  if (jump) {
+    await jumpDictIndex(jump.dataset.jump);
+    return;
+  }
   const row = e.target.closest(".dict-index-row");
-  if (row) await openDictTopic(Number(row.dataset.rowid), row.textContent);
+  if (row) await openDictTopic(Number(row.dataset.rowid), row.dataset.topic ?? row.textContent);
 }
 
 /** ↑/↓ move through the topics and open them (like e-Sword); Home/End jump in the window. */
@@ -2923,15 +3158,19 @@ function onDictIndexKey(e) {
   const next = rows[j];
   next.focus();
   clearTimeout(state.dictKeyTimer);
-  state.dictKeyTimer = setTimeout(() => openDictTopic(Number(next.dataset.rowid), next.textContent), 120);
+  state.dictKeyTimer = setTimeout(() => openDictTopic(Number(next.dataset.rowid), next.dataset.topic ?? next.textContent), 120);
 }
 
-/** Show exactly one index topic in the article column. */
+/** Show exactly one index topic in the article column (Diccionario or Léxico). */
 async function openDictTopic(rowid, topic) {
+  // A row belongs to the index on screen: its module and its table, never another tab's.
   const ix = state.dictIndex;
-  const module = (ix && ix.module) || state.studyModule;
-  if (!module || !Number.isFinite(rowid)) return;
-  state.dictBrowse = { module, rowid, topic };
+  if (!ix || !ix.module || !Number.isFinite(rowid)) return;
+  const lexicon = !!ix.lexicon;
+  const ws = lexicon ? "lexico" : "diccionario";
+  if (state.workspace !== ws) return;
+  const module = ix.module;
+  state.dictBrowse = { ws, module, rowid, topic };
   if (ix) {
     ix.selected = rowid;
     $$("#dict-index .dict-index-row").forEach((r) => r.setAttribute("aria-selected", String(Number(r.dataset.rowid) === rowid)));
@@ -2941,27 +3180,35 @@ async function openDictTopic(rowid, topic) {
   let entry = null;
   let err = null;
   try {
-    entry = await invoke("get_dictionary_entry", { modulePath: module, rowid });
+    const args = { modulePath: module, rowid, sections: true };
+    if (lexicon) args.lexicon = true;
+    entry = await invoke("get_dictionary_entry", args);
   } catch (e) {
     err = e;
   }
-  if (seq !== state.renderSeq || state.workspace !== "diccionario" || state.dictBrowse?.rowid !== rowid) return;
+  if (seq !== state.renderSeq || state.workspace !== ws || state.dictBrowse?.rowid !== rowid) return;
   const abbr = state.modules.find((m) => m.path === module)?.abbreviation || "";
-  const q = (state.selectedWord || "").trim();
-  let html = `<div class="study-banner">Diccionario · ${escapeHtml(abbr)} · ${escapeHtml(topic)}</div>`;
+  // «Volver» goes back to what the tab was showing: the Léxico's Strong number or word.
+  const q = (lexicon ? strongCode(state.lastStrong) || state.selectedWord || "" : state.selectedWord || "").trim();
+  let html = `<div class="study-banner">${lexicon ? "Léxico" : "Diccionario"} · ${escapeHtml(abbr)} · ${escapeHtml(topic)}</div>`;
   if (q) html += `<div class="dict-browse-bar"><button type="button" class="glass-btn compact" id="btn-dict-back">← Volver a «${escapeHtml(q)}»</button></div>`;
   if (err) html += errorHtml(err, module);
   else if (!entry) html += `<div class="empty-state soft">Este tema no tiene texto en <strong>${escapeHtml(abbr)}</strong>.</div>`;
-  else
+  else {
+    // Léxico: a Strong's number opened from the Índice gets its Spanish words («ES»).
+    const code = lexicon ? strongCode(entry.topic) : "";
     html += `
       <article class="study-entry">
         <div class="topic">${escapeHtml(entry.topic)}</div>
+        ${code ? glossRowHtml(code, "in-entry") : ""}
         <div class="study-body">${linkifyHtml(entry.html, { book: state.book, chapter: state.chapter })}</div>
       </article>`;
+  }
   setStudyRefreshing(content, false);
   content.innerHTML = html;
   normalizeBibleRefElements(content);
   content.scrollTop = 0;
+  if (lexicon) fillGlossSlots(content, () => seq === state.renderSeq && state.workspace === ws);
   state.renderedKey = ""; // the word's results are not on screen any more
   const back = $("#btn-dict-back");
   if (back)
@@ -3013,6 +3260,7 @@ async function renderDictionaryView(content, module = state.studyModule, isCurre
       query: q,
       limit: 40,
       ...bridgeArgs,
+      sections: true, // main panel: section titles of combined dictionaries
     });
   } catch (e) {
     entries = [];
@@ -3048,6 +3296,107 @@ async function renderDictionaryView(content, module = state.studyModule, isCurre
   await renderDictIndex(module, q, isCurrent);
   if (!isCurrent()) return;
   await refreshAnalysisPane();
+}
+
+// —— «ES» line (2026-11-18, ported from the Windows build) ——
+// A Strong's number's Reina-Valera renderings from a Spanish Strong's dictionary («G26» →
+// «ágape, amado, amor»): the only Spanish there is for a number typed by hand, clicked in a
+// definition or opened from the Índice. For particles the list is how the RV renders the word in
+// places, not its meaning, so the row says it comes from the Strong's dictionary.
+
+/**
+ * The installed Spanish Strong's dictionaries, chosen by title («Diccionario Strong en
+ * Español», «…de palabras originales…», «Strong Spa»): not StrongPLUS, the Septuagint one, the
+ * Multiléxico (one entry mixes several dictionaries) nor the English or Portuguese Strong's. The
+ * lexicon in use goes first when it is one of them. At most 4.
+ */
+function strongGlossSources() {
+  const current = state.workspace === "lexico" ? state.studyModule : state.modulesByKind.lexico || "";
+  const list = modulesOf("lexicon").filter((m) => {
+    const t = m.title || "";
+    return !m.encrypted && /\bstrong\b/i.test(t) && /espa[nñ]ol|espaniol|\bspa\b|palabras originales/i.test(t) && !/plus|septuaginta/i.test(t);
+  });
+  const rank = (m) => {
+    const a = `${m.abbreviation || ""} ${m.title || ""}`;
+    if (current && m.path === current) return 0;
+    if (/°/.test(a)) return 1; // Strong ° — the e-Sword set
+    if (/STRONGes|Strong-ES|palabras originales/i.test(a)) return 2;
+    if (/\(esp\)/i.test(a)) return 3;
+    return 4; // Strong SPA: no Greek/Hebrew
+  };
+  return list
+    .sort((a, b) => rank(a) - rank(b) || String(a.path).localeCompare(String(b.path)))
+    .slice(0, 4)
+    .map((m) => m.path);
+}
+
+/** The renderings of `code` (cached per first source), or null when no dictionary has a list. */
+async function fetchStrongGloss(code) {
+  const c = strongCode(code);
+  const sources = strongGlossSources();
+  if (!c || !sources.length) return null;
+  const key = `${sources[0]}|${c}`;
+  if (state.glossCache.has(key)) return state.glossCache.get(key);
+  let g = null;
+  try {
+    g = (await invoke("strong_gloss", { code: c, modulePaths: sources })) || null;
+  } catch (_) {
+    return null; // not cached: a failed read may work next time
+  }
+  if (state.glossCache.size > 500) state.glossCache.clear();
+  state.glossCache.set(key, g);
+  return g;
+}
+
+/** An «ES» row to fill once the words arrive (see fillGlossSlots). */
+function glossRowHtml(code, extraClass = "") {
+  return `<div class="lex-es-row${extraClass ? ` ${extraClass}` : ""}" data-gloss-code="${escapeAttr(code)}" title="Traducciones de la Reina-Valera según el Diccionario Strong en español">
+    <span class="lex-es-label">ES</span><span class="lex-es-val es-pending" aria-live="polite">Buscando la traducción…</span>
+  </div>`;
+}
+
+/**
+ * Fill every «ES» row under `root`. In the Léxico card the dictionary also supplies the original
+ * word and its pronunciation when the card has none (a number typed by hand).
+ */
+async function fillGlossSlots(root, isCurrent = () => true) {
+  const rows = root ? $$(".lex-es-row[data-gloss-code]", root) : [];
+  for (const row of rows) {
+    const code = row.dataset.glossCode;
+    const g = await fetchStrongGloss(code);
+    if (!isCurrent() || !root.contains(row)) return; // re-rendered meanwhile
+    const val = row.querySelector(".lex-es-val");
+    if (!val) continue;
+    val.classList.remove("es-pending");
+    row.querySelector(".lex-es-src")?.remove();
+    if (!g || !g.spanish) {
+      val.classList.add("es-none");
+      val.textContent = strongGlossSources().length
+        ? "(el Diccionario Strong no da traducción para este número)"
+        : "(instale un Diccionario Strong en español para ver la traducción)";
+      continue;
+    }
+    val.classList.remove("es-none");
+    val.textContent = g.spanish;
+    const src = document.createElement("span");
+    src.className = "lex-es-src";
+    src.textContent = ` · ${g.source || g.module || ""}`;
+    row.appendChild(src);
+    const card = row.closest(".lex-card");
+    if (!card) continue;
+    const orig = card.querySelector(".lex-original");
+    if (orig && orig.textContent.trim() === "—" && g.original) {
+      orig.textContent = g.original;
+      if (/[\u0590-\u05FF]/.test(g.original)) orig.classList.add("dir-rtl");
+    }
+    if (g.translit && !card.querySelector(".lex-translit") && orig && orig.parentElement) {
+      const tr = document.createElement("div");
+      tr.className = "lex-translit";
+      tr.title = "Pronunciación";
+      tr.textContent = g.translit;
+      orig.parentElement.appendChild(tr); // the column ends with the word: right under it
+    }
+  }
 }
 
 /**
@@ -3122,6 +3471,7 @@ function buildLexiconInterlinearCard(wl) {
         <div class="lex-spanish">${spanish ? escapeHtml(spanish) : "—"}</div>
       </div>
     </div>
+    ${strong ? glossRowHtml(strong) : ""}
     ${
       strong
         ? `<div class="lex-strong-row">
@@ -3163,8 +3513,10 @@ function buildLexiconInterlinearCard(wl) {
 async function renderLexiconView(content, module = state.studyModule, isCurrent = () => true) {
   // Prefer Strong from latest interconnect, then selection, then box
   let q = (state.lastStrong || state.selectedWord || $("#dict-query").value || "").trim();
+  state.dictBrowse = null;
   if (!q) {
-    content.innerHTML = `<div class="empty-state soft">Toque una palabra en la Biblia (RV1960). Espada la enlaza al Strong (H… / G…) vía el interlineal y muestra <strong>hebreo/griego + español</strong> aquí.</div>`;
+    content.innerHTML = `<div class="empty-state soft">Toque una palabra en la Biblia (RV1960). Espada la enlaza al Strong (H… / G…) vía el interlineal y muestra <strong>hebreo/griego + español</strong> aquí. También puede elegir un número del índice.</div>`;
+    await renderDictIndex(module, "", isCurrent, true);
     return;
   }
   $("#dict-query").value = q;
@@ -3202,7 +3554,7 @@ async function renderLexiconView(content, module = state.studyModule, isCurrent 
   const topic = state.lexTopic && state.lexTopic.path === module ? state.lexTopic.topic : "";
   if (topic) {
     try {
-      const entry = await invoke("lookup_lexicon", { modulePath: module, strong: topic });
+      const entry = await invoke("lookup_lexicon", { modulePath: module, strong: topic, sections: true });
       if (!isCurrent()) return;
       if (entry) {
         seen.add(entry.topic);
@@ -3220,6 +3572,7 @@ async function renderLexiconView(content, module = state.studyModule, isCurrent 
       const entry = await invoke("lookup_lexicon", {
         modulePath: module,
         strong: code,
+        sections: true, // main panel: the Multiléxico's «Diccionario Strong», «… Tuggy»…
       });
       lookupOk++;
       if (lexEntryMatches(entry, code)) {
@@ -3271,6 +3624,11 @@ async function renderLexiconView(content, module = state.studyModule, isCurrent 
   normalizeBibleRefElements(content);
   // .original-chip clicks are handled once by #study-content.onclick (class word-like).
 
+  fillGlossSlots(content, isCurrent); // «ES»: not awaited, the Índice need not wait for it
+
+  // The Índice beside it, at the number shown (or the typed word).
+  await renderDictIndex(module, primary[0] || strongCode(q) || q, isCurrent, true);
+  if (!isCurrent()) return;
   await refreshAnalysisPane();
 }
 
@@ -3645,6 +4003,9 @@ function bindEvents() {
   $("#btn-verse-pick").onclick = () => openVersePicker();
   if ($("#btn-verse-prev")) $("#btn-verse-prev").onclick = () => stepVerse(-1);
   if ($("#btn-verse-next")) $("#btn-verse-next").onclick = () => stepVerse(1);
+  if ($("#btn-dev-prev")) $("#btn-dev-prev").onclick = () => stepDevotionalDay(-1);
+  if ($("#btn-dev-next")) $("#btn-dev-next").onclick = () => stepDevotionalDay(1);
+  if ($("#btn-dev-today")) $("#btn-dev-today").onclick = () => setDevotionalDate(todayMonthDay());
   $("#btn-history").onclick = () => openHistory();
   $("#btn-settings").onclick = () => openPanel("#panel-settings");
   const btnCross = $("#btn-crossrefs");
@@ -3740,11 +4101,12 @@ function bindEvents() {
   };
   // e-Sword: the topic index follows what is typed (Enter still runs the full search).
   $("#dict-query").oninput = () => {
-    if (state.workspace !== "diccionario") return;
+    const ws = state.workspace;
+    if (ws !== "diccionario" && ws !== "lexico") return;
     clearTimeout(state.dictIndexTimer);
     state.dictIndexTimer = setTimeout(() => {
       const module = (state.dictIndex && state.dictIndex.module) || state.studyModule;
-      if (state.workspace === "diccionario" && module) renderDictIndex(module, $("#dict-query").value.trim());
+      if (state.workspace === ws && module) renderDictIndex(module, $("#dict-query").value.trim(), undefined, ws === "lexico");
     }, 150);
   };
 
@@ -3790,6 +4152,10 @@ function bindEvents() {
         state.modulesByKind.comentario = mini.dataset.path;
         state.studyModule = mini.dataset.path;
         setWorkspace("comentario");
+      } else if (mini.dataset.kind === "dev") {
+        state.modulesByKind.devocional = mini.dataset.path;
+        state.studyModule = mini.dataset.path;
+        setWorkspace("devocional"); // same day, the other devotional
       }
     }
   });
@@ -3887,7 +4253,7 @@ function bindEvents() {
   const bible = $("#bible-content");
   /** Make the verse containing `el` the current (and only selected) verse. */
   const selectVerseOf = (el) => {
-    const verseEl = el.closest(".verse, tr");
+    const verseEl = el.closest(".verse, .vtitles, tr");
     if (!verseEl?.dataset.verse) return;
     state.verse = Number(verseEl.dataset.verse);
     state.selectedVerses = new Set([state.verse]);
@@ -3960,7 +4326,7 @@ function bindEvents() {
 
   bible.oncontextmenu = (e) => {
     state.ctxWord = null;
-    const verse = e.target.closest(".verse");
+    const verse = e.target.closest(".verse, .vtitles");
     if (verse?.dataset.verse) {
       const v = Number(verse.dataset.verse);
       if (!state.selectedVerses.has(v)) {
@@ -4098,9 +4464,9 @@ function bindEvents() {
       hideCtx();
       return;
     }
-    // ISS-18: verse stepping in Comentario. Never while typing, choosing in a select, or with a
-    // panel open; ↑/↓ alone keep scrolling long notes.
-    if (state.workspace !== "comentario" || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    // ISS-18: verse stepping in Comentario (and day stepping in Devocional). Never while typing,
+    // choosing in a select, or with a panel open; ↑/↓ alone keep scrolling long notes.
+    if ((state.workspace !== "comentario" && state.workspace !== "devocional") || e.metaKey || e.ctrlKey || e.shiftKey) return;
     const t = e.target;
     if (t && typeof t.closest === "function" && t.closest("input, textarea, select, [contenteditable]")) return;
     if (!$("#overlay").classList.contains("hidden")) return;
@@ -4111,7 +4477,8 @@ function bindEvents() {
     else if (!e.altKey && e.key === "ArrowLeft") delta = -1;
     if (!delta) return;
     e.preventDefault();
-    stepVerse(delta);
+    if (state.workspace === "devocional") stepDevotionalDay(delta);
+    else stepVerse(delta);
   });
 }
 
@@ -4142,10 +4509,10 @@ async function init() {
   const study = loadLS(LS.study, null);
   if (study) {
     state.workspace = study.workspace || study.tab || "biblia";
-    if (state.workspace === "comentario" || state.workspace === "diccionario" || state.workspace === "lexico" || state.workspace === "biblia") {
+    if (["comentario", "diccionario", "lexico", "devocional", "biblia"].includes(state.workspace)) {
       /* ok */
     } else state.workspace = "biblia";
-    state.modulesByKind = study.modulesByKind || state.modulesByKind;
+    state.modulesByKind = study.modulesByKind || state.modulesByKind; // a missing tab key reads as «nothing saved»
     state.filters = study.filters || state.filters;
     state.selectedWord = study.selectedWord || null;
     state.lastStrong = strongCode(study.lastStrong); // a saved 'H0' is ignored
