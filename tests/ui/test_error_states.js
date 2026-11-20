@@ -52,7 +52,7 @@ scenario("Léxico: every lookup rejected → error block, not «No se encontró 
   excludes(studyText(), "No se encontró definición", "not presented as missing");
 });
 
-scenario("Comentario: get_commentary rejected → error block; «Elegir otro módulo» focuses the selector", () => {
+scenario("Comentario: get_commentary rejected → error block; «Elegir otro módulo» opens the module list", () => {
   boot({ storage: on("comentario") });
   H.overrides.get_commentary = (a) => (a.modulePath === CMH ? { err: "no such table: VerseCommentary" } : undefined);
   clickEl($id("btn-verse-next"));
@@ -61,7 +61,10 @@ scenario("Comentario: get_commentary rejected → error block; «Elegir otro mó
   includes(errBox().textContent, "Formato de módulo no compatible", "headline");
   includes(errBox().textContent, "no such table: VerseCommentary", "raw detail kept small");
   clickEl(errBox().querySelector('[data-error-act="choose"]'));
-  assert(document.activeElement === $id("sel-study-module"), "module selector focused");
+  // The native select is hidden now (focusing it showed nothing): the module dropdown opens instead.
+  eq($id("glass-menu").dataset.for, "sel-study-module", "module list open");
+  assert(!$id("glass-menu").classList.contains("hidden"), "menu visible");
+  assert($id("glass-menu").contains(document.activeElement), "focus inside the list");
 });
 
 scenario("Edge: unknown error text → generic Spanish headline, escaped detail", () => {

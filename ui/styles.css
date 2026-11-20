@@ -440,12 +440,14 @@ body[data-theme="muted-lila"] .glass {
 }
 
 /* —— Titlebar —— */
+/* One row: name (left) · workspace tabs (centered on the WINDOW: equal side columns) · context + actions */
 .titlebar {
   height: var(--titlebar-h);
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px 0 78px; /* traffic lights */
+  column-gap: 12px;
+  padding: 0 16px;
   border-radius: 0;
   border-left: none;
   border-right: none;
@@ -462,11 +464,20 @@ body[data-theme="muted-lila"] .glass {
   align-items: baseline;
   gap: 10px;
   min-width: 0;
-  flex: 1;
   height: 100%;
   align-items: center;
+  padding-left: 62px; /* traffic lights (16px titlebar padding + 62px = the old 78px) */
   -webkit-app-region: drag;
   app-region: drag;
+}
+
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  height: 100%;
 }
 
 /* Buttons must NOT be drag regions or clicks/drag break */
@@ -501,24 +512,25 @@ body[data-theme="muted-lila"] .glass {
   gap: 6px;
 }
 
-/* —— Workspace tabs —— */
+/* —— Workspace tabs: one compact pill in the titlebar, sized to its tabs (no empty stretch) —— */
 .workspace-tabs {
+  position: relative; /* .ws-thumb is placed from the tabs' offsetLeft */
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 5px 12px 5px 10px;
-  margin: 0 10px 8px;
+  gap: 2px;
+  padding: 3px;
   border-radius: 999px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  /* Segmented control glass */
+  flex-wrap: nowrap;
   background: var(--glass-soft);
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.08) inset,
-    0 8px 24px rgba(0, 0, 0, 0.12);
+  border: var(--border);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 .ws-tab {
+  position: relative;
+  z-index: 1;
   font: inherit;
   font-size: 13px;
   font-weight: 650;
@@ -526,10 +538,39 @@ body[data-theme="muted-lila"] .glass {
   background: transparent;
   border: none;
   border-radius: 999px;
-  padding: 8px 16px;
+  padding: 6px 14px;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 0.18s var(--ease), color 0.18s var(--ease), box-shadow 0.18s var(--ease);
   letter-spacing: -0.01em;
+}
+
+/* The sliding pill under the active tab (placed by placeWsThumb; hidden until measured) */
+.ws-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 0;
+  border-radius: 999px;
+  background: var(--glass-strong);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.12) inset,
+    0 2px 10px rgba(0, 0, 0, 0.14);
+  opacity: 0;
+  pointer-events: none;
+}
+.workspace-tabs.has-thumb .ws-thumb {
+  opacity: 1;
+}
+.workspace-tabs.thumb-ready .ws-thumb {
+  transition: transform 0.3s var(--ease), width 0.3s var(--ease);
+}
+/* With the thumb in place the active tab itself stays clear (the thumb is its background) */
+.workspace-tabs.has-thumb .ws-tab.active,
+.workspace-tabs.has-thumb .ws-tab.active:hover {
+  background: transparent;
+  box-shadow: none;
 }
 
 .ws-tab:hover {
@@ -546,17 +587,22 @@ body[data-theme="muted-lila"] .glass {
 }
 
 .ws-context {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
   color: var(--text-muted);
   min-width: 0;
-  max-width: 42%;
-  padding: 4px 10px;
+  max-width: 100%;
+  height: 32px;
+  padding: 0 12px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--glass-strong) 70%, transparent);
+  background: var(--glass-soft);
+  border: var(--border);
+}
+/* Strong chips sit inside the chip's right end, pill in pill */
+.ws-context .ws-ctx-strongs:not(:empty) {
+  margin-right: -8px;
 }
 
 .ws-ctx-label {
@@ -578,7 +624,9 @@ body[data-theme="muted-lila"] .glass {
 .ws-ctx-strongs {
   display: flex;
   gap: 4px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .chip-strong {
@@ -603,7 +651,7 @@ body[data-theme="muted-lila"] .glass {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr var(--study-w);
   gap: 10px;
-  padding: 0 10px 10px;
+  padding: 10px; /* the tab row is gone (tabs live in the titlebar): same gutter on top */
   min-height: 0;
 }
 
@@ -2959,5 +3007,606 @@ html[data-read-font="opendyslexic"] .il-unit .il-s {
     height: 168px;
     border-right: 0;
     border-bottom: var(--border);
+  }
+}
+
+/* —— Navigation pickers (2026-11-19): tiles, bars and dropdown menus ——
+   The native <select>s stay in the DOM as the source of truth (app.v7.js reads and drives
+   them) but are never shown; the buttons below are what the reader sees and uses.
+   Spacing on the 4/8 grid; type sizes 11 (labels, meta), 13 (controls), 15 (values). */
+.native-proxy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  pointer-events: none;
+}
+
+/* Dropdown button (Libro, Biblia, Paralela, módulo de estudio, fuente de referencias) */
+.picker-btn {
+  font: inherit;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 16px;
+  text-align: left;
+  background: var(--glass-soft);
+  border: var(--border);
+  border-radius: 999px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  cursor: pointer;
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease), box-shadow 0.18s var(--ease);
+}
+.picker-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.picker-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.picker-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.pk-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.pk-main {
+  font-size: 13px;
+  font-weight: 650;
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pk-sub {
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pk-chev {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.2s var(--ease);
+}
+.picker-btn[aria-expanded="true"] .pk-chev {
+  transform: rotate(180deg);
+}
+
+/* Libro: the bigger tile, with its testament badge */
+.picker-btn.book-pick {
+  min-height: 48px;
+}
+.book-pick .pk-main {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.testament-badge {
+  flex-shrink: 0;
+  min-width: 28px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: var(--heading);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--chip-border, rgba(255, 255, 255, 0.12)) inset;
+}
+
+/* Capítulo: one bar ‹ 8 › — the number opens the chapter tiles */
+.stepper-bar {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  gap: 0;
+  border: var(--border);
+  border-radius: 999px;
+  background: var(--glass-soft);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  overflow: hidden;
+}
+.step-btn,
+.step-value {
+  font: inherit;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.step-btn {
+  width: 40px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.step-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  border-left: var(--border);
+  border-right: var(--border);
+}
+.step-btn:hover:not(:disabled),
+.step-value:hover {
+  background: var(--accent-soft);
+  color: var(--heading);
+}
+.step-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+/* Keyboard focus ring: drawn on :focus (old-WebKit fallback), hidden again for pointer focus */
+.picker-btn:focus,
+.step-btn:focus,
+.step-value:focus,
+.verse-tile:focus,
+.num-tile:focus,
+.book-tile:focus,
+.verse-grid button:focus,
+.mode-btn:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.picker-btn:focus:not(:focus-visible),
+.step-btn:focus:not(:focus-visible),
+.step-value:focus:not(:focus-visible),
+.verse-tile:focus:not(:focus-visible),
+.num-tile:focus:not(:focus-visible),
+.book-tile:focus:not(:focus-visible),
+.verse-grid button:focus:not(:focus-visible),
+.mode-btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Vers.: a single tile */
+.verse-tile {
+  font: inherit;
+  width: 64px;
+  height: 40px;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--glass-soft);
+  border: var(--border);
+  border-radius: 999px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.verse-tile:hover {
+  background: var(--accent-soft);
+  color: var(--heading);
+}
+
+/* Lectura / Paralela: a segmented bar with a sliding thumb */
+.mode-toggle {
+  position: relative;
+  padding: 3px;
+  gap: 4px;
+  border-radius: 999px;
+}
+.mode-toggle::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 10px) / 2);
+  border-radius: 999px;
+  background: var(--glass-strong);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14), 0 1px 0 rgba(255, 255, 255, 0.08) inset;
+  transition: transform 0.28s var(--ease);
+}
+.mode-toggle[data-mode="paralela"]::before {
+  transform: translateX(calc(100% + 4px));
+}
+.mode-btn {
+  position: relative;
+  z-index: 1;
+  border-radius: 999px;
+  transition: color 0.2s var(--ease);
+}
+.mode-btn:hover:not(.active) {
+  color: var(--text);
+}
+.mode-btn.active {
+  color: var(--heading);
+  background: transparent;
+  box-shadow: none;
+}
+
+.btn-with-icon {
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+}
+.btn-with-icon svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+/* —— Anchored dropdown panels (books, chapters, verses) ——
+   openPanel(id, { anchor }) puts the panel right under the control that opened it (top/left/
+   max-height are inline). The overlay stays, but clear: a click outside closes, nothing dims. */
+.soft-panel.anchored {
+  transform: none; /* the centered panels use translate(-50%, -50%) */
+  transform-origin: top left;
+  border-radius: 22px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.32);
+  animation: glass-menu-in 0.18s var(--ease);
+}
+.soft-panel.anchored .panel-close {
+  display: none; /* a dropdown closes with a click outside or Esc */
+}
+.soft-panel.anchored .soft-panel-header {
+  padding: 10px 12px 4px;
+}
+.soft-panel.anchored .soft-panel-header h2 {
+  font-size: 13px;
+}
+body .overlay.clear,
+body[data-theme="frosted-glass"] .overlay.clear {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+#panel-verse-picker.anchored {
+  width: min(392px, calc(100vw - 24px));
+  padding-bottom: 4px;
+}
+
+/* —— #panel-books: Génesis…Apocalipsis as small pills, split AT / NT —— */
+/* Book, chapter and verse pills share one surface (opaque base under the glass tint) */
+.soft-panel.books-panel,
+#panel-verse-picker {
+  background-color: var(--bg-base);
+  background-image: linear-gradient(var(--glass-strong), var(--glass-strong));
+}
+.soft-panel.books-panel {
+  width: min(392px, calc(100vw - 24px));
+  max-height: min(82vh, 760px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.books-panel .soft-panel-header {
+  position: static;
+  gap: 8px;
+  justify-content: flex-start;
+}
+/* Books step: the search field is the whole header */
+.books-panel[data-view="books"] .soft-panel-header {
+  display: none;
+}
+.books-panel .soft-panel-header h2 {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.books-panel .soft-panel-header .icon-btn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.books-subtitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.books-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 4px;
+}
+.books-tools .glass-input {
+  border-radius: 999px;
+  padding: 6px 14px;
+  min-height: 32px;
+  font-size: 13px;
+}
+.books-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 0 8px;
+}
+.testament-sec {
+  padding: 0 12px 4px;
+}
+.testament-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.testament-title span:first-child {
+  color: var(--heading);
+}
+.testament-count {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.book-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  gap: 6px;
+}
+.book-tile {
+  font: inherit;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px;
+  text-align: center;
+  background: var(--glass-soft);
+  border: var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+.bt-name {
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.book-tile:hover,
+.num-tile:hover,
+.verse-grid button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.book-tile:active,
+.num-tile:active,
+.verse-grid button:active {
+  transform: scale(0.96);
+}
+.book-tile.active,
+.num-tile.active,
+.verse-grid button.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.book-tile.active .bt-name {
+  color: var(--heading);
+}
+
+/* Chapter pills (#panel-books) and verse pills (#panel-verse-picker): one look */
+.num-grid,
+.verse-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+  gap: 6px;
+  padding: 6px 12px 12px;
+}
+.num-tile,
+.verse-grid button {
+  font: inherit;
+  height: 32px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--glass-soft);
+  border: var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease), transform 0.15s var(--ease);
+}
+.num-tile.active,
+.verse-grid button.active {
+  color: var(--heading);
+}
+
+/* —— #glass-menu: the dropdown list, mounted at body level —— */
+.glass-menu {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 6px;
+  overflow: hidden;
+  color: var(--text);
+  border-radius: 22px; /* a tall list can't be a pill: same radius as the panels */
+  /* Opaque base under the glass tint: a list must stay legible over any text behind it */
+  background-color: var(--bg-base);
+  background-image: linear-gradient(var(--glass-strong), var(--glass-strong));
+  backdrop-filter: blur(var(--blur-strong)) saturate(170%);
+  -webkit-backdrop-filter: blur(var(--blur-strong)) saturate(170%);
+  border: var(--border);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.32);
+  animation: glass-menu-in 0.18s var(--ease);
+}
+@keyframes glass-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.gm-search {
+  padding: 4px 4px 8px;
+  flex-shrink: 0;
+}
+.gm-search .glass-input {
+  border-radius: 999px;
+  padding: 8px 16px;
+  min-height: 32px;
+}
+.gm-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.gm-item {
+  font: inherit;
+  color: var(--text);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 16px 8px 12px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+}
+/* Menu rows: hover tints the row; keyboard focus also draws an inset ring, so the two never look alike */
+.gm-item:hover,
+.gm-item:focus {
+  outline: none;
+  background: var(--accent-soft);
+}
+.gm-item:focus {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.gm-check {
+  width: 16px;
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 20px;
+  color: var(--heading);
+  text-align: center;
+}
+.gm-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.gm-main {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.gm-item.selected .gm-main {
+  color: var(--heading);
+}
+.gm-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gm-file {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+.gm-empty {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Frosted Glass (transparent window): denser surfaces so lists stay readable over the desktop */
+body[data-theme="frosted-glass"] .soft-panel.books-panel,
+body[data-theme="frosted-glass"] #panel-verse-picker {
+  background: rgba(12, 24, 44, 0.92);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-color: rgba(185, 163, 201, 0.2);
+}
+body[data-theme="frosted-glass"] .glass-menu {
+  background: rgba(14, 26, 48, 0.94);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-color: rgba(185, 163, 201, 0.2);
+}
+body[data-theme="frosted-glass"] .mode-toggle::before {
+  background: color-mix(in srgb, var(--glass-strong) 70%, var(--accent) 30%);
+  box-shadow: 0 1px 0 rgba(220, 200, 240, 0.12) inset, 0 2px 12px rgba(4, 10, 24, 0.14);
+}
+
+.glass-menu.gm-redraw {
+  animation: none;
+}
+/* Panel header buttons (‹ back, × close) are circles, like the reader's ‹ › — no squircles next to pills */
+.soft-panel-header .icon-btn {
+  border-radius: 999px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .glass-menu,
+  .soft-panel.anchored {
+    animation: none;
+  }
+  .mode-toggle::before {
+    transition: none;
+  }
+}
+
+/* —— Unified titlebar (2026-11-19): tabs centered in the title row —— */
+body[data-theme="frosted-glass"] .ws-thumb {
+  background: color-mix(in srgb, var(--glass-strong) 70%, var(--accent) 30%);
+  box-shadow: 0 1px 0 rgba(220, 200, 240, 0.12) inset, 0 2px 12px rgba(4, 10, 24, 0.14);
+}
+/* Narrow windows (min 900px): the subtitle, then the «Contexto» label give way to the tabs */
+@media (max-width: 1180px) {
+  .app-sub {
+    display: none;
+  }
+}
+@media (max-width: 1040px) {
+  .ws-ctx-label {
+    display: none;
+  }
+  #ws-ctx-word {
+    max-width: 96px;
   }
 }

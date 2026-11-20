@@ -311,7 +311,10 @@ async function reloadCrossReferences() {
     if (payload?.sourcePath) {
       state.crossRefSourcePath = payload.sourcePath;
       const sel = $("#sel-crossref-source");
-      if (sel && payload.sourcePath) sel.value = payload.sourcePath;
+      if (sel && payload.sourcePath) {
+        sel.value = payload.sourcePath;
+        syncMenuTrigger(sel);
+      }
     }
     if (hint) {
       const src = payload?.source ? `Fuente: ${payload.source}` : "";
@@ -605,15 +608,416 @@ function updateQueryPlaceholder() {
 }
 
 // —— Soft UI ——
-function openPanel(id) {
-  $("#overlay").classList.remove("hidden");
-  $(id).classList.remove("hidden");
+// A panel opens centered (settings, history…) or, with `anchor`, as a dropdown right under that
+// control (books, chapters, verses): no trip across the screen. An anchored one gets a clear
+// overlay — a click outside still closes it, without dimming the app.
+const anchoredPanel = { panel: null, anchor: null };
+function openPanel(id, { anchor = null } = {}) {
+  closeGlassMenu();
+  const panel = $(id);
+  const overlay = $("#overlay");
+  overlay.classList.toggle("clear", !!anchor);
+  overlay.classList.remove("hidden");
+  panel.classList.toggle("anchored", !!anchor);
+  panel.classList.remove("hidden");
+  if (anchor) {
+    anchoredPanel.panel = panel;
+    anchoredPanel.anchor = anchor;
+    placeAnchoredPanel(panel, anchor);
+  } else {
+    for (const k of ["left", "top", "bottom", "maxHeight"]) panel.style[k] = "";
+  }
+}
+/** Under the control (above it when there is no room below), clamped inside the window. */
+function placeAnchoredPanel(panel, anchor) {
+  const pad = 12;
+  const r = anchor.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const width = Math.min(panel.offsetWidth || 392, vw - 2 * pad);
+  const below = vh - r.bottom - 6 - pad;
+  const above = r.top - 6 - pad;
+  const up = below < 260 && above > below;
+  panel.style.left = `${Math.max(pad, Math.min(r.left, vw - width - pad))}px`;
+  panel.style.maxHeight = `${Math.max(200, up ? above : below)}px`;
+  panel.style.top = up ? "auto" : `${r.bottom + 6}px`;
+  panel.style.bottom = up ? `${vh - r.top + 6}px` : "auto";
 }
 function closePanels() {
+  closeGlassMenu();
+  const books = $("#panel-books");
+  const booksWasOpen = books && !books.classList.contains("hidden");
   $("#overlay").classList.add("hidden");
   $$(".soft-panel").forEach((p) => p.classList.add("hidden"));
+  anchoredPanel.panel = null;
+  anchoredPanel.anchor = null;
   hideCtx();
   hideTooltip();
+  if (booksWasOpen && bookPicker.opener) bookPicker.opener.focus();
+  bookPicker.opener = null;
+}
+
+// —— Pickers: book/chapter tiles and dropdown menus ——
+// The native <select>s stay in the DOM, hidden. For Biblia / Paralela / módulo / fuente they
+// are still the source of truth: fillSelect fills them, a menu pick sets them and runs their
+// own onchange. Libro and Capítulo are painted from `state` and navigate through goTo; their
+// selects are only kept in sync (older code and tests read them).
+const OT_LAST_BOOK = 39; // Génesis…Malaquías; Mateo (40)…Apocalipsis (66) is the NT
+const MENU_SELECTS = ["sel-bible", "sel-parallel1", "sel-parallel2", "sel-study-module", "sel-crossref-source"];
+const glassMenu = { sel: null };
+const bookPicker = { book: 0, opener: null }; // book whose chapters are shown (not navigated to until a chapter is picked); button to refocus
+
+/** Accent- and case-insensitive text with single spaces (menu filter: «nvi» ≠ «Traducción Viviente»). */
+function foldWords(s) {
+  return String(s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+/** Same, spaces dropped (book filter: «genesis» finds Génesis, «1co» 1 Corintios). */
+function foldText(s) {
+  return foldWords(s).replace(/ /g, "");
+}
+
+function syncNavPickers() {
+  const name = $("#book-pick-name");
+  if (name) name.textContent = state.books.length ? bookName(state.book) : "—";
+  const badge = $("#book-testament");
+  if (badge) {
+    const ot = state.book <= OT_LAST_BOOK;
+    badge.textContent = ot ? "AT" : "NT";
+    badge.title = ot ? "Antiguo Testamento" : "Nuevo Testamento";
+  }
+  const ch = $("#btn-chapter-pick");
+  if (ch) {
+    ch.textContent = String(state.chapter);
+    ch.setAttribute("aria-label", `Capítulo ${state.chapter}. Elegir capítulo`);
+  }
+  const prev = $("#btn-prev-ch");
+  if (prev) prev.disabled = state.book <= 1 && state.chapter <= 1;
+  const next = $("#btn-next-ch");
+  if (next) next.disabled = state.book >= 66 && state.chapter >= bookChapters(state.book);
+  MENU_SELECTS.forEach((id) => syncMenuTrigger($(`#${id}`)));
+}
+
+function menuTriggerFor(sel) {
+  return sel && sel.id ? $(`[data-menu-for="${sel.id}"]`) : null;
+}
+/** Paint a dropdown button from its (hidden) select: label, sub-title, tooltip, enabled. */
+function syncMenuTrigger(sel) {
+  const btn = menuTriggerFor(sel);
+  if (!btn) return;
+  const opt = sel.options[sel.selectedIndex] || null;
+  const main = opt ? opt.textContent.trim() : "";
+  const title = opt ? opt.getAttribute("title") || "" : "";
+  const mainEl = $(".pk-main", btn);
+  const subEl = $(".pk-sub", btn);
+  if (mainEl) mainEl.textContent = main || "—";
+  if (subEl) subEl.textContent = btn.dataset.menuSub === "title" && title !== main ? title : "";
+  btn.title = title || main;
+  btn.disabled = !sel.options.length;
+  const label = btn.dataset.label || "";
+  if (label) btn.setAttribute("aria-label", main ? `${label}: ${main}` : label);
+}
+function glassMenuOpen() {
+  return !!glassMenu.sel;
+}
+function closeGlassMenu({ focusTrigger = false } = {}) {
+  const pop = $("#glass-menu");
+  if (!pop || !glassMenu.sel) return;
+  const trigger = menuTriggerFor(glassMenu.sel);
+  glassMenu.sel = null;
+  pop.classList.add("hidden");
+  pop.classList.toggle("gm-redraw", false);
+  pop.innerHTML = "";
+  pop.dataset.for = "";
+  if (trigger) {
+    trigger.setAttribute("aria-expanded", "false");
+    if (focusTrigger) trigger.focus();
+  }
+}
+function openGlassMenu(sel) {
+  const pop = $("#glass-menu");
+  const trigger = menuTriggerFor(sel);
+  if (!pop || !trigger) return;
+  if (glassMenu.sel === sel) {
+    closeGlassMenu({ focusTrigger: true }); // second click on the same button closes it
+    return;
+  }
+  closeGlassMenu();
+  const opts = [...sel.options];
+  if (!opts.length) return;
+  const withSub = trigger.dataset.menuSub === "title";
+  const searchable = opts.length > 8;
+  // Two modules with the same name and title (two RVR1960 files) get their file name added.
+  const labelOf = (o) => {
+    const main = o.textContent.trim();
+    const title = o.getAttribute("title") || "";
+    return { main, title, sub: withSub && title && title !== main ? title : "" };
+  };
+  const seen = new Map();
+  opts.forEach((o) => {
+    const l = labelOf(o);
+    const k = `${l.main}\u0000${l.sub}`;
+    seen.set(k, (seen.get(k) || 0) + 1);
+  });
+  const name = trigger.dataset.label || trigger.getAttribute("aria-label") || "";
+  pop.innerHTML = `${
+    searchable
+      ? `<div class="gm-search"><input type="search" class="glass-input" id="gm-filter" placeholder="Buscar…" aria-label="Filtrar ${escapeAttr(name.toLowerCase())}" autocomplete="off" spellcheck="false" /></div>`
+      : ""
+  }<div class="gm-list" role="listbox" aria-label="${escapeAttr(name)}">${opts
+    .map((o, i) => {
+      const on = i === sel.selectedIndex;
+      const { main, title, sub } = labelOf(o);
+      const file = o.value ? String(o.value).split(/[\\/]/).pop() : "";
+      const dup = file && seen.get(`${main}\u0000${sub}`) > 1;
+      return `<button type="button" role="option" class="gm-item${on ? " selected" : ""}" data-i="${i}" data-v="${escapeAttr(o.value)}" aria-selected="${on}"${
+        title ? ` title="${escapeAttr(title)}"` : ""
+      }><span class="gm-check" aria-hidden="true">${on ? "✓" : ""}</span><span class="gm-text"><span class="gm-main">${escapeHtml(
+        main || "—"
+      )}</span>${sub ? `<span class="gm-sub">${escapeHtml(sub)}</span>` : ""}${
+        dup ? `<span class="gm-sub gm-file">${escapeHtml(file)}</span>` : ""
+      }</span></button>`;
+    })
+    .join("")}</div><div class="gm-empty hidden">Sin resultados</div>`;
+  glassMenu.sel = sel;
+  pop.dataset.for = sel.id;
+  trigger.setAttribute("aria-expanded", "true");
+  pop.classList.remove("hidden");
+  placeGlassMenu(pop, trigger);
+  const focusEl = $("#gm-filter", pop) || $(".gm-item.selected", pop) || $(".gm-item", pop);
+  focusEl?.focus();
+  $(".gm-item.selected", pop)?.scrollIntoView({ block: "nearest" });
+}
+/** Under the button (above it when there is no room), clamped inside the window. */
+function placeGlassMenu(pop, trigger) {
+  const pad = 12;
+  const r = trigger.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const width = Math.min(Math.max(r.width, 300), 420, vw - 2 * pad);
+  const left = Math.max(pad, Math.min(r.left, vw - width - pad));
+  const below = vh - r.bottom - pad - 6;
+  const above = r.top - pad - 6;
+  const up = below < 220 && above > below;
+  const room = Math.max(160, Math.min(up ? above : below, 460));
+  pop.style.width = `${width}px`;
+  pop.style.left = `${left}px`;
+  pop.style.maxHeight = `${room}px`;
+  pop.style.top = up ? "auto" : `${Math.max(pad, Math.min(r.bottom + 6, vh - room - pad))}px`;
+  pop.style.bottom = up ? `${vh - r.top + 6}px` : "auto";
+}
+/** The select under an open menu was rebuilt (content probe, folder reload): redraw the rows. */
+function refreshGlassMenu(sel) {
+  if (!sel || glassMenu.sel !== sel) return;
+  const pop = $("#glass-menu");
+  const q = $("#gm-filter", pop)?.value || "";
+  const active = document.activeElement;
+  const inFilter = active && active.id === "gm-filter";
+  const rowV = active && typeof active.closest === "function" ? active.closest(".gm-item")?.getAttribute("data-v") : null;
+  const listTop = $(".gm-list", pop)?.scrollTop || 0;
+  closeGlassMenu();
+  if (!sel.options.length) return;
+  pop.classList.add("gm-redraw"); // same menu, new rows: no open animation
+  openGlassMenu(sel);
+  const f = $("#gm-filter", pop);
+  if (f && q) {
+    f.value = q;
+    filterGlassMenu(q);
+  }
+  const list = $(".gm-list", pop);
+  if (list) list.scrollTop = listTop; // where the reader was, not back at the ✓ row
+  const row = rowV != null ? $$(".gm-item", pop).find((it) => it.getAttribute("data-v") === rowV) : null;
+  if (row && !row.classList.contains("hidden")) row.focus();
+  else if (inFilter) f?.focus();
+}
+/** Pick by VALUE: a content probe may re-sort the select's options while the menu is open. */
+function chooseGlassMenuItem(item) {
+  const sel = glassMenu.sel;
+  if (!sel || !item) return;
+  const v = item.getAttribute("data-v");
+  const opt = [...sel.options].find((o) => o.value === v);
+  closeGlassMenu({ focusTrigger: true });
+  if (!opt || opt.value === sel.value) return; // like a native select: same choice, no change
+  sel.value = opt.value;
+  syncMenuTrigger(sel);
+  // The select's own handler (it reads e.target.value), exactly as a native pick would run it.
+  if (typeof sel.onchange === "function") sel.onchange({ type: "change", target: sel, currentTarget: sel });
+}
+function filterGlassMenu(q) {
+  const pop = $("#glass-menu");
+  const f = foldWords(q);
+  let shown = 0;
+  $$(".gm-item", pop).forEach((it) => {
+    const hit = !f || foldWords(it.textContent).includes(f) || foldWords(it.getAttribute("title")).includes(f);
+    it.classList.toggle("hidden", !hit);
+    if (hit) shown++;
+  });
+  $(".gm-empty", pop)?.classList.toggle("hidden", shown > 0);
+}
+function onGlassMenuKey(e) {
+  const pop = $("#glass-menu");
+  const items = $$(".gm-item", pop).filter((it) => !it.classList.contains("hidden"));
+  const at = items.indexOf(document.activeElement);
+  const inFilter = e.target && e.target.id === "gm-filter";
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation(); // only the menu closes, not a panel under it
+    closeGlassMenu({ focusTrigger: true });
+  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!items.length) return;
+    const d = e.key === "ArrowDown" ? 1 : -1;
+    if (at < 0) (d > 0 ? items[0] : items[items.length - 1]).focus();
+    else if (at === 0 && d < 0 && $("#gm-filter", pop)) $("#gm-filter", pop).focus();
+    else items[Math.max(0, Math.min(items.length - 1, at + d))].focus();
+  } else if (e.key === "Home" || e.key === "End") {
+    if (inFilter || !items.length) return;
+    e.preventDefault();
+    (e.key === "Home" ? items[0] : items[items.length - 1]).focus();
+  } else if (e.key === "Enter" && inFilter) {
+    e.preventDefault();
+    // Like a native select: Enter with nothing typed keeps the current choice.
+    if (!foldWords(e.target.value)) closeGlassMenu({ focusTrigger: true });
+    else if (items[0]) chooseGlassMenuItem(items[0]);
+  } else if (e.key === "Tab") {
+    e.preventDefault(); // the rows are about to be removed: focus goes back to the button
+    closeGlassMenu({ focusTrigger: true });
+  } else if (!inFilter && e.key && e.key.length === 1 && e.key !== " " && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    // Type-ahead in short lists: the next item whose name starts with the letter.
+    const k = foldText(e.key);
+    if (!k) return;
+    const order = items.slice(at + 1).concat(items.slice(0, at + 1));
+    const hit = order.find((it) => foldText($(".gm-main", it)?.textContent).replace(/^[^a-z0-9]+/, "").startsWith(k));
+    if (hit) hit.focus();
+  }
+}
+
+// Book → chapter navigator (#panel-books): a dropdown under the Libro pill
+// Short labels for the small pills: a little longer than the reference abbreviations (1S, Mr,
+// Stg) so each book is recognisable at a glance; the full name is the tooltip and the
+// accessible name.
+const BOOK_SHORT = [
+  "", "Gén", "Éx", "Lev", "Núm", "Deut", "Jos", "Jue", "Rut", "1 Sam", "2 Sam", "1 Re", "2 Re",
+  "1 Cr", "2 Cr", "Esd", "Neh", "Est", "Job", "Sal", "Prov", "Ecl", "Cant", "Is", "Jer", "Lam",
+  "Ez", "Dan", "Os", "Joel", "Am", "Abd", "Jon", "Miq", "Nah", "Hab", "Sof", "Hag", "Zac", "Mal",
+  "Mat", "Mar", "Luc", "Juan", "Hch", "Rom", "1 Cor", "2 Cor", "Gál", "Ef", "Fil", "Col",
+  "1 Tes", "2 Tes", "1 Tim", "2 Tim", "Tit", "Flm", "Heb", "Sant", "1 Pe", "2 Pe", "1 Jn",
+  "2 Jn", "3 Jn", "Jud", "Ap",
+];
+function bookShort(b) {
+  return BOOK_SHORT[b.number] || b.abbr || String(b.number);
+}
+function bookTileHtml(b) {
+  const on = b.number === state.book;
+  const caps = `${b.chapters} ${b.chapters === 1 ? "capítulo" : "capítulos"}`;
+  return `<button type="button" class="book-tile${on ? " active" : ""}" data-book="${b.number}"${
+    on ? ' aria-current="true"' : ""
+  } title="${escapeAttr(`${b.name} · ${caps}`)}" aria-label="${escapeAttr(b.name)}"><span class="bt-name">${escapeHtml(
+    bookShort(b)
+  )}</span></button>`;
+}
+function renderBookGrid() {
+  const panel = $("#panel-books");
+  const body = $("#books-body");
+  if (!panel || !body) return;
+  panel.dataset.view = "books";
+  $("#books-title").textContent = "Libros";
+  $("#books-subtitle").textContent = "Génesis – Apocalipsis";
+  $("#btn-books-back").classList.add("hidden");
+  $("#books-tools").classList.remove("hidden");
+  const books = state.books.slice().sort((a, b) => a.number - b.number);
+  const section = (id, title, list) =>
+    list.length
+      ? `<section class="testament-sec" id="${id}" aria-label="${title}"><h3 class="testament-title"><span>${title}</span><span class="testament-count" data-total="${
+          list.length
+        }">${list.length} libros</span></h3><div class="book-grid">${list.map(bookTileHtml).join("")}</div></section>`
+      : "";
+  body.innerHTML =
+    section("books-ot", "Antiguo Testamento", books.filter((b) => b.number <= OT_LAST_BOOK)) +
+    section("books-nt", "Nuevo Testamento", books.filter((b) => b.number > OT_LAST_BOOK)) +
+    `<div class="empty-state soft hidden" id="books-empty">Ningún libro coincide.</div>`;
+  const filter = $("#book-filter");
+  if (filter && filter.value) filterBookGrid(filter.value);
+}
+function renderChapterGrid(book) {
+  const panel = $("#panel-books");
+  const body = $("#books-body");
+  if (!panel || !body) return;
+  bookPicker.book = book;
+  panel.dataset.view = "chapters";
+  const n = bookChapters(book);
+  $("#books-title").textContent = bookName(book);
+  $("#books-subtitle").textContent = `${book <= OT_LAST_BOOK ? "AT" : "NT"} · ${n} ${n === 1 ? "capítulo" : "capítulos"}`;
+  $("#btn-books-back").classList.remove("hidden");
+  $("#books-tools").classList.add("hidden");
+  const cur = book === state.book ? state.chapter : 0;
+  body.innerHTML = `<div class="num-grid chapter-grid" role="group" aria-label="${escapeAttr(`Capítulos de ${bookName(book)}`)}">${Array.from(
+    { length: n },
+    (_, i) => {
+      const c = i + 1;
+      return `<button type="button" class="num-tile${c === cur ? " active" : ""}" data-ch="${c}"${c === cur ? ' aria-current="true"' : ""}>${c}</button>`;
+    }
+  ).join("")}</div>`;
+}
+function filterBookGrid(q) {
+  const f = foldText(q);
+  let shown = 0;
+  $$(".testament-sec", $("#books-body")).forEach((sec) => {
+    let n = 0;
+    $$(".book-tile", sec).forEach((t) => {
+      const b = state.books.find((x) => x.number === Number(t.dataset.book));
+      const hit =
+        !f || !b || foldText(b.name).includes(f) || foldText(b.abbr).startsWith(f) || foldText(bookShort(b)).startsWith(f);
+      t.classList.toggle("hidden", !hit);
+      if (hit) n++;
+    });
+    sec.classList.toggle("hidden", !n);
+    const count = $(".testament-count", sec);
+    if (count) {
+      const total = Number(count.dataset.total) || n;
+      count.textContent = n === total ? `${total} libros` : `${n} de ${total}`;
+    }
+    shown += n;
+  });
+  $("#books-empty")?.classList.toggle("hidden", shown > 0);
+}
+/**
+ * view "books": the 66 small pills (AT, NT); view "chapters": the chapter pills of `book`.
+ * Opens as a dropdown under `anchor` (the Libro pill, or the Capítulo bar).
+ */
+function openBookPicker(view = "books", book = state.book, { opener = null, anchor = null } = {}) {
+  const filter = $("#book-filter");
+  if (filter) filter.value = "";
+  if (view === "chapters") renderChapterGrid(book);
+  else renderBookGrid();
+  openPanel("#panel-books", { anchor: anchor || opener });
+  bookPicker.opener = opener;
+  if (view === "chapters") {
+    const t = $("#books-body .num-tile.active") || $("#books-body .num-tile");
+    t?.focus();
+    t?.scrollIntoView({ block: "nearest" });
+  } else {
+    $("#books-body .book-tile.active")?.scrollIntoView({ block: "nearest" });
+    filter?.focus();
+  }
+}
+async function pickBookTile(n) {
+  if (!n) return;
+  if (bookChapters(n) <= 1) await pickChapterTile(n, 1); // Abdías, Filemón, 2–3 Juan, Judas
+  else {
+    renderChapterGrid(n);
+    ($("#books-body .num-tile.active") || $("#books-body .num-tile"))?.focus();
+  }
+}
+async function pickChapterTile(book, chapter) {
+  closePanels();
+  if (book === state.book && chapter === state.chapter) return; // already there
+  await goTo(book, chapter, 1);
 }
 function showTooltip(html, x, y) {
   const tip = $("#tooltip");
@@ -812,6 +1216,8 @@ function fillSelect(sel, items, valueKey, labelFn, selected) {
     const firstOk = items.find((i) => !i.encrypted) || items[0];
     sel.value = firstOk[valueKey];
   }
+  syncMenuTrigger(sel);
+  refreshGlassMenu(sel);
 }
 
 /**
@@ -931,6 +1337,7 @@ async function loadModules(dir, { refreshStudy = true, persist = true } = {}) {
 function updateBibleTitleTooltip() {
   const m = state.modules.find((x) => x.path === state.biblePath);
   $("#sel-bible").title = m ? m.title : "";
+  syncMenuTrigger($("#sel-bible"));
 }
 
 // —— Study module per tab ——
@@ -1072,7 +1479,11 @@ function selectStudyModuleSync(ws = state.workspace) {
   const sel = $("#sel-study-module");
   if (!STUDY_KIND[ws]) {
     state.studyModule = "";
-    if (sel) sel.innerHTML = "";
+    if (sel) {
+      sel.innerHTML = "";
+      syncMenuTrigger(sel);
+      refreshGlassMenu(sel);
+    }
     return "";
   }
   const availability = cachedStudyProbe(ws);
@@ -1161,6 +1572,24 @@ async function fillStudyModuleSelect(ws = state.workspace) {
 }
 
 // —— Workspace tabs ——
+/**
+ * Slide the pill (.ws-thumb) under the active tab. Tabs differ in width, so it is measured.
+ * Until a measurement works (no layout yet) the bar has no .has-thumb and the active tab
+ * keeps its own pill background, so it never looks unselected.
+ */
+function placeWsThumb() {
+  const nav = $(".workspace-tabs");
+  const thumb = nav && $(".ws-thumb", nav);
+  const tab = nav && $(".ws-tab.active", nav);
+  if (!thumb || !tab || typeof tab.offsetLeft !== "number" || !tab.offsetWidth) return;
+  thumb.style.width = `${tab.offsetWidth}px`;
+  thumb.style.transform = `translateX(${tab.offsetLeft}px)`;
+  if (!nav.classList.contains("has-thumb")) {
+    nav.classList.add("has-thumb");
+    // First placement jumps into place; only later moves animate.
+    requestAnimationFrame(() => nav.classList.add("thumb-ready"));
+  }
+}
 function setWorkspace(ws, { skipReload = false } = {}) {
   if (ws !== "comentario") state.cmtWord = null; // the word card belongs to the commentary view
   state.workspace = ws;
@@ -1169,6 +1598,7 @@ function setWorkspace(ws, { skipReload = false } = {}) {
     t.classList.toggle("active", on);
     t.setAttribute("aria-selected", on ? "true" : "false");
   });
+  placeWsThumb();
   const isBible = ws === "biblia";
   const wasHidden = $("#view-biblia").classList.contains("hidden");
   $("#view-biblia").classList.toggle("hidden", !isBible);
@@ -1263,6 +1693,7 @@ function updateContextBar() {
   const w = state.selectedWord || "—";
   $("#ws-ctx-word").textContent = w;
   $("#ws-ctx-strongs").innerHTML = state.wordLinks ? strongChipsHtml(state.wordLinks) : "";
+  $("#ws-context")?.classList.toggle("hidden", !state.selectedWord); // titlebar chip: only with a word
   updateAnalysisChrome();
 }
 
@@ -1686,8 +2117,10 @@ function fillChapters() {
   if (state.chapter > n) state.chapter = n;
   if (state.chapter < 1) state.chapter = 1;
   $("#sel-chapter").value = String(state.chapter);
+  syncNavPickers();
 }
 function updateLocationLabel() {
+  syncNavPickers();
   const m = state.modules.find((x) => x.path === state.biblePath);
   $("#location-label").textContent = `${bookName(state.book)} ${state.chapter}:${state.verse}${
     m ? ` · ${m.abbreviation}` : ""
@@ -3895,7 +4328,8 @@ function clearMarks() {
   hideCtx();
 }
 
-async function openVersePicker() {
+/** `anchor`: the control it drops down from (Vers. pill, or the reader's location chip). */
+async function openVersePicker(anchor = null) {
   let count = 30;
   if (state.biblePath) {
     try {
@@ -3913,7 +4347,7 @@ async function openVersePicker() {
     const v = i + 1;
     return `<button type="button" data-v="${v}" class="${v === state.verse ? "active" : ""}">${v}</button>`;
   }).join("");
-  openPanel("#panel-verse-picker");
+  openPanel("#panel-verse-picker", { anchor });
 }
 function openHistory() {
   const list = $("#history-list");
@@ -3984,7 +4418,7 @@ function bindEvents() {
   if ($("#btn-next-ch")) $("#btn-next-ch").onclick = goNext;
   if ($("#btn-prev-passage")) $("#btn-prev-passage").onclick = goPrev;
   if ($("#btn-next-passage")) $("#btn-next-passage").onclick = goNext;
-  if ($("#btn-location-chip")) $("#btn-location-chip").onclick = () => openVersePicker();
+  if ($("#btn-location-chip")) $("#btn-location-chip").onclick = () => openVersePicker($("#btn-location-chip"));
 
   if ($("#btn-last-visited")) {
     $("#btn-last-visited").onclick = async () => {
@@ -4000,7 +4434,101 @@ function bindEvents() {
     };
   }
 
-  $("#btn-verse-pick").onclick = () => openVersePicker();
+  // Under the Capítulo / Vers. row, left-aligned with the books and chapters dropdowns.
+  $("#btn-verse-pick").onclick = () => openVersePicker($("#btn-verse-pick").closest(".nav-row") || $("#btn-verse-pick"));
+
+  // Book / chapter pills (#panel-books): a dropdown under the control that opened it
+  if ($("#btn-book-pick")) {
+    $("#btn-book-pick").onclick = () => openBookPicker("books", state.book, { opener: $("#btn-book-pick") });
+  }
+  if ($("#btn-chapter-pick")) {
+    $("#btn-chapter-pick").onclick = () =>
+      openBookPicker("chapters", state.book, { opener: $("#btn-chapter-pick"), anchor: $("#btn-chapter-pick").closest(".stepper-bar") });
+  }
+  if ($("#btn-books-back")) {
+    $("#btn-books-back").onclick = () => {
+      renderBookGrid();
+      $(`#books-body .book-tile[data-book="${bookPicker.book}"]`)?.scrollIntoView({ block: "nearest" });
+      $("#book-filter")?.focus();
+    };
+  }
+  const booksBody = $("#books-body");
+  if (booksBody) {
+    booksBody.onclick = async (e) => {
+      const ch = e.target.closest("[data-ch]");
+      if (ch) {
+        await pickChapterTile(bookPicker.book, Number(ch.dataset.ch));
+        return;
+      }
+      const bt = e.target.closest("[data-book]");
+      if (bt) await pickBookTile(Number(bt.dataset.book));
+    };
+  }
+  const bookFilter = $("#book-filter");
+  if (bookFilter) {
+    bookFilter.oninput = () => filterBookGrid(bookFilter.value);
+    bookFilter.onkeydown = async (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      if (!foldText(bookFilter.value)) return; // nothing typed: Enter does not open Génesis
+      const first = $$("#books-body .book-tile").find((t) => !t.classList.contains("hidden"));
+      if (first) await pickBookTile(Number(first.dataset.book));
+    };
+  }
+
+  // Dropdown menus (#glass-menu) for every [data-menu-for] button
+  $$("[data-menu-for]").forEach((btn) => {
+    btn.onclick = () => openGlassMenu($(`#${btn.dataset.menuFor}`));
+    btn.onkeydown = (e) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      e.preventDefault();
+      e.stopPropagation(); // never a verse step in Comentario
+      if (!glassMenuOpen()) openGlassMenu($(`#${btn.dataset.menuFor}`));
+    };
+  });
+  const gm = $("#glass-menu");
+  if (gm) {
+    gm.onclick = (e) => {
+      const it = e.target.closest(".gm-item");
+      if (it) chooseGlassMenuItem(it);
+    };
+    gm.oninput = (e) => {
+      if (e.target && e.target.id === "gm-filter") filterGlassMenu(e.target.value);
+    };
+    gm.onkeydown = onGlassMenuKey;
+  }
+  // A press outside the menu (and outside its button, which toggles it) closes it.
+  document.addEventListener("mousedown", (e) => {
+    if (!glassMenuOpen()) return;
+    const t = e.target;
+    if (t && typeof t.closest === "function" && (t.closest("#glass-menu") || t.closest("[data-menu-for]"))) return;
+    closeGlassMenu();
+  });
+  window.addEventListener("resize", () => {
+    closeGlassMenu();
+    placeWsThumb();
+    if (anchoredPanel.panel && anchoredPanel.anchor) placeAnchoredPanel(anchoredPanel.panel, anchoredPanel.anchor);
+  });
+  // Tab widths change when fonts finish loading or the bar is laid out again: re-measure the pill.
+  const wsNav = $(".workspace-tabs");
+  if (wsNav && typeof ResizeObserver === "function") new ResizeObserver(() => placeWsThumb()).observe(wsNav);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => placeWsThumb()).catch(() => {});
+  // The menu is position: fixed under its button: only a scroll that MOVES the button closes it
+  // (the page, the sidebar, the cross-references panel). Render code also scrolls (the reader to
+  // the selected verse, study content to the top) — those must not close a menu just opened.
+  document.addEventListener(
+    "scroll",
+    (e) => {
+      if (!glassMenuOpen()) return;
+      const t = e.target;
+      const trigger = menuTriggerFor(glassMenu.sel);
+      const page = t === document || t === document.documentElement || t === document.body;
+      if (page || (trigger && t && typeof t.contains === "function" && t.contains(trigger))) closeGlassMenu();
+    },
+    true
+  );
+  window.addEventListener("blur", () => closeGlassMenu());
+
   if ($("#btn-verse-prev")) $("#btn-verse-prev").onclick = () => stepVerse(-1);
   if ($("#btn-verse-next")) $("#btn-verse-next").onclick = () => stepVerse(1);
   if ($("#btn-dev-prev")) $("#btn-dev-prev").onclick = () => stepDevotionalDay(-1);
@@ -4066,6 +4594,7 @@ function bindEvents() {
     btn.onclick = async () => {
       $$(".mode-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
+      $(".mode-toggle")?.setAttribute("data-mode", btn.dataset.mode);
       state.mode = btn.dataset.mode;
       $("#parallel-controls").classList.toggle("hidden", state.mode !== "paralela");
       persistParallel();
@@ -4268,7 +4797,7 @@ function bindEvents() {
     if (errAct) {
       e.preventDefault();
       if (errAct.dataset.errorAct === "retry") await reloadChapter();
-      else $("#sel-bible")?.focus();
+      else openGlassMenu($("#sel-bible")); // «Elegir otro módulo»: the Bible list, open
       return;
     }
     const strong = e.target.closest(".strong-ref");
@@ -4355,7 +4884,7 @@ function bindEvents() {
       if (act.dataset.errorAct === "retry") {
         state.renderedKey = "";
         await loadStudyView();
-      } else $("#sel-study-module")?.focus();
+      } else openGlassMenu($("#sel-study-module")); // «Elegir otro módulo»: the module list, open
       return;
     }
     const el = e.target.closest(".bible-ref, .strong-ref, .chip-strong, .word-like, .lex-original[data-strong]");
@@ -4460,10 +4989,15 @@ function bindEvents() {
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (glassMenuOpen()) {
+        closeGlassMenu({ focusTrigger: true }); // Esc closes the menu first, the panel under it stays
+        return;
+      }
       closePanels();
       hideCtx();
       return;
     }
+    if (glassMenuOpen()) return; // arrows belong to the open menu, never a verse/day step
     // ISS-18: verse stepping in Comentario (and day stepping in Devocional). Never while typing,
     // choosing in a select, or with a panel open; ↑/↓ alone keep scrolling long notes.
     if ((state.workspace !== "comentario" && state.workspace !== "devocional") || e.metaKey || e.ctrlKey || e.shiftKey) return;
@@ -4526,6 +5060,7 @@ async function init() {
   $("#flt-chapter").checked = !!state.filters.chapter;
   $("#flt-book").checked = !!state.filters.book;
   $$(".mode-btn").forEach((b) => b.classList.toggle("active", b.dataset.mode === state.mode));
+  $(".mode-toggle")?.setAttribute("data-mode", state.mode);
   $("#parallel-controls").classList.toggle("hidden", state.mode !== "paralela");
 
   bindEvents();

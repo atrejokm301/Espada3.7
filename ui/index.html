@@ -10,67 +10,90 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <!-- Cache-bust: bump BUILD_ID whenever UI must force-reload in WKWebView -->
-  <link rel="stylesheet" href="styles.v7.css?v=release-port1" />
+  <link rel="stylesheet" href="styles.v7.css?v=nav-tiles3" />
 </head>
 <body data-theme="true-dark">
   <div id="app">
     <!-- Titlebar: drag region for window move (needs allow-start-dragging) -->
+    <!-- Unified titlebar (2026-11-19): app name · workspace tabs (centered pill) · context + actions.
+         The empty title area left and right stays the window drag region. -->
     <header class="titlebar glass" data-tauri-drag-region>
       <div class="titlebar-left" data-tauri-drag-region>
         <span class="app-mark" aria-hidden="true" data-tauri-drag-region>▴</span>
         <span class="app-title" data-tauri-drag-region>Espada3.7</span>
         <span class="app-sub" id="build-stamp" data-tauri-drag-region title="Release · arrastre la barra de título">· Asignación del Cielo</span>
       </div>
-      <div class="titlebar-actions" data-no-drag>
-        <button type="button" id="btn-theme" class="icon-btn" data-no-drag title="Apariencia · Temas">🎨</button>
-        <button type="button" id="btn-settings" class="icon-btn" data-no-drag title="Ajustes">⚙</button>
+
+      <!-- Main workspace tabs (synced, not floating e-Sword windows); .ws-thumb slides under the active one -->
+      <nav class="workspace-tabs" role="tablist" aria-label="Áreas de estudio" data-no-drag>
+        <span class="ws-thumb" aria-hidden="true"></span>
+        <button type="button" class="ws-tab active" data-ws="biblia" role="tab" aria-selected="true">Biblia</button>
+        <button type="button" class="ws-tab" data-ws="comentario" role="tab">Comentario</button>
+        <button type="button" class="ws-tab" data-ws="diccionario" role="tab">Diccionario</button>
+        <button type="button" class="ws-tab" data-ws="lexico" role="tab">Léxico</button>
+        <button type="button" class="ws-tab" data-ws="devocional" role="tab">Devocional</button>
+      </nav>
+
+      <div class="titlebar-right" data-tauri-drag-region>
+        <!-- Shown only while a word is selected -->
+        <div class="ws-context hidden" id="ws-context" data-no-drag title="Palabra / Strong activos">
+          <span class="ws-ctx-label">Contexto</span>
+          <span id="ws-ctx-word">—</span>
+          <span id="ws-ctx-strongs" class="ws-ctx-strongs"></span>
+        </div>
+        <div class="titlebar-actions" data-no-drag>
+          <button type="button" id="btn-theme" class="icon-btn" data-no-drag title="Apariencia · Temas">🎨</button>
+          <button type="button" id="btn-settings" class="icon-btn" data-no-drag title="Ajustes">⚙</button>
+        </div>
       </div>
     </header>
 
     <!-- Themes live only in the 🎨 picker panel (#panel-theme), not a chrome strip -->
 
-    <!-- Main workspace tabs (synced, not floating e-Sword windows) -->
-    <nav class="workspace-tabs glass" role="tablist" aria-label="Áreas de estudio">
-      <button type="button" class="ws-tab active" data-ws="biblia" role="tab" aria-selected="true">Biblia</button>
-      <button type="button" class="ws-tab" data-ws="comentario" role="tab">Comentario</button>
-      <button type="button" class="ws-tab" data-ws="diccionario" role="tab">Diccionario</button>
-      <button type="button" class="ws-tab" data-ws="lexico" role="tab">Léxico</button>
-      <button type="button" class="ws-tab" data-ws="devocional" role="tab">Devocional</button>
-      <div class="ws-context" id="ws-context" title="Palabra / Strong activos">
-        <span class="ws-ctx-label">Contexto:</span>
-        <span id="ws-ctx-word">—</span>
-        <span id="ws-ctx-strongs" class="ws-ctx-strongs"></span>
-      </div>
-    </nav>
-
     <div class="main-layout">
       <!-- Left: navigation -->
       <aside class="sidebar glass">
+        <!-- The native selects stay (hidden): Biblia / Paralela are still filled and changed through
+             them (fillSelect, onchange); Libro / Capítulo buttons are painted from app state. -->
         <div class="nav-block">
           <label class="field-label">Libro</label>
-          <select id="sel-book" class="glass-select"></select>
+          <button type="button" id="btn-book-pick" class="picker-btn book-pick" aria-haspopup="dialog" title="Elegir libro y capítulo">
+            <span class="testament-badge" id="book-testament">—</span>
+            <span class="pk-text"><span class="pk-main" id="book-pick-name">—</span></span>
+            <svg class="pk-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <select id="sel-book" class="native-proxy" tabindex="-1" aria-hidden="true"></select>
         </div>
         <div class="nav-row">
           <div class="nav-block grow">
             <label class="field-label">Capítulo</label>
-            <div class="chap-nav">
-              <button type="button" id="btn-prev-ch" class="icon-btn" title="Anterior">‹</button>
-              <select id="sel-chapter" class="glass-select"></select>
-              <button type="button" id="btn-next-ch" class="icon-btn" title="Siguiente">›</button>
+            <div class="chap-nav stepper-bar" role="group" aria-label="Capítulo">
+              <button type="button" id="btn-prev-ch" class="step-btn" title="Capítulo anterior" aria-label="Capítulo anterior">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+              </button>
+              <button type="button" id="btn-chapter-pick" class="step-value" aria-haspopup="dialog" title="Elegir capítulo">1</button>
+              <button type="button" id="btn-next-ch" class="step-btn" title="Capítulo siguiente" aria-label="Capítulo siguiente">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+              </button>
             </div>
+            <select id="sel-chapter" class="native-proxy" tabindex="-1" aria-hidden="true"></select>
           </div>
           <div class="nav-block">
             <label class="field-label">Vers.</label>
-            <button type="button" id="btn-verse-pick" class="glass-btn compact">1</button>
+            <button type="button" id="btn-verse-pick" class="verse-tile" title="Elegir versículo" aria-haspopup="dialog">1</button>
           </div>
         </div>
 
         <div class="nav-block">
           <label class="field-label">Biblia</label>
-          <select id="sel-bible" class="glass-select" title=""></select>
+          <button type="button" class="picker-btn" data-menu-for="sel-bible" data-label="Biblia" aria-controls="glass-menu" data-menu-sub="title" aria-haspopup="listbox" aria-expanded="false" aria-label="Biblia">
+            <span class="pk-text"><span class="pk-main">—</span><span class="pk-sub"></span></span>
+            <svg class="pk-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <select id="sel-bible" class="native-proxy" tabindex="-1" aria-hidden="true" title=""></select>
         </div>
 
-        <div class="mode-toggle">
+        <div class="mode-toggle" role="group" aria-label="Modo de lectura" data-mode="lectura">
           <button type="button" class="mode-btn active" data-mode="lectura">Lectura</button>
           <button type="button" class="mode-btn" data-mode="paralela">Paralela</button>
         </div>
@@ -78,15 +101,26 @@
         <div id="parallel-controls" class="parallel-controls hidden">
           <div class="nav-block">
             <label class="field-label">Paralela 1</label>
-            <select id="sel-parallel1" class="glass-select"></select>
+            <button type="button" class="picker-btn" data-menu-for="sel-parallel1" data-label="Paralela 1" aria-controls="glass-menu" data-menu-sub="title" aria-haspopup="listbox" aria-expanded="false" aria-label="Paralela 1">
+              <span class="pk-text"><span class="pk-main">—</span><span class="pk-sub"></span></span>
+              <svg class="pk-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <select id="sel-parallel1" class="native-proxy" tabindex="-1" aria-hidden="true"></select>
           </div>
           <div class="nav-block">
             <label class="field-label">Paralela 2</label>
-            <select id="sel-parallel2" class="glass-select"></select>
+            <button type="button" class="picker-btn" data-menu-for="sel-parallel2" data-label="Paralela 2" aria-controls="glass-menu" data-menu-sub="title" aria-haspopup="listbox" aria-expanded="false" aria-label="Paralela 2">
+              <span class="pk-text"><span class="pk-main">—</span><span class="pk-sub"></span></span>
+              <svg class="pk-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <select id="sel-parallel2" class="native-proxy" tabindex="-1" aria-hidden="true"></select>
           </div>
         </div>
 
-        <button type="button" id="btn-history" class="glass-btn full">Historial · Recientes</button>
+        <button type="button" id="btn-history" class="glass-btn full btn-with-icon">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
+          <span>Historial · Recientes</span>
+        </button>
 
         <div class="nav-block" style="margin-top:8px">
           <label class="field-label">Notas del capítulo</label>
@@ -136,7 +170,11 @@
 
         <!-- Study chrome (module + search) — hidden on Biblia -->
         <div id="study-chrome" class="study-chrome hidden">
-          <select id="sel-study-module" class="glass-select grow" aria-label="Módulo de estudio"></select>
+          <button type="button" class="picker-btn grow" data-menu-for="sel-study-module" data-label="Módulo de estudio" aria-controls="glass-menu" aria-haspopup="listbox" aria-expanded="false" aria-label="Módulo de estudio">
+            <span class="pk-text"><span class="pk-main">—</span></span>
+            <svg class="pk-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <select id="sel-study-module" class="native-proxy" tabindex="-1" aria-hidden="true" aria-label="Módulo de estudio"></select>
           <div id="verse-stepper" class="verse-stepper hidden" role="group" aria-label="Versículo del comentario">
             <button type="button" id="btn-verse-prev" class="icon-btn" title="Versículo anterior (← o Alt+↑)" aria-label="Versículo anterior">‹</button>
             <span id="verse-stepper-label" class="verse-stepper-label" aria-live="polite">v.1</span>
@@ -198,6 +236,26 @@
   <!-- Soft panels (settings / history / verse picker only — not study popups) -->
   <div id="overlay" class="overlay hidden"></div>
 
+  <!-- Book → chapter navigator: a dropdown under the Libro pill (or the Capítulo bar).
+       Génesis…Apocalipsis as small pills in two sections (AT / NT); app.v7.js fills #books-body -->
+  <div id="panel-books" class="soft-panel books-panel hidden" role="dialog" aria-labelledby="books-title" data-view="books">
+    <div class="soft-panel-header books-header">
+      <button type="button" id="btn-books-back" class="icon-btn hidden" title="Volver a los libros" aria-label="Volver a los libros">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <h2 id="books-title">Libros</h2>
+      <span id="books-subtitle" class="books-subtitle"></span>
+      <button type="button" class="icon-btn panel-close" data-close aria-label="Cerrar">×</button>
+    </div>
+    <div class="books-tools" id="books-tools">
+      <input type="search" id="book-filter" class="glass-input grow" placeholder="Buscar libro…" aria-label="Buscar libro" autocomplete="off" spellcheck="false" />
+    </div>
+    <div id="books-body" class="books-body"></div>
+  </div>
+
+  <!-- One dropdown menu for every [data-menu-for] button (body level: never clipped by a pane) -->
+  <div id="glass-menu" class="glass-menu hidden"></div>
+
   <div id="panel-verse-picker" class="soft-panel hidden">
     <div class="soft-panel-header">
       <h2>Elegir versículo</h2>
@@ -221,7 +279,11 @@
     </div>
     <div class="crossrefs-toolbar">
       <div class="crossrefs-from" id="crossrefs-from">—</div>
-      <select id="sel-crossref-source" class="glass-select grow" title="Fuente de referencias"></select>
+      <button type="button" class="picker-btn grow" data-menu-for="sel-crossref-source" data-label="Fuente de referencias" aria-controls="glass-menu" aria-haspopup="listbox" aria-expanded="false" aria-label="Fuente de referencias">
+        <span class="pk-text"><span class="pk-main">—</span></span>
+        <svg class="pk-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <select id="sel-crossref-source" class="native-proxy" tabindex="-1" aria-hidden="true" title="Fuente de referencias"></select>
     </div>
     <p class="hint-mini crossrefs-hint" id="crossrefs-hint">
       Pasajes relacionados (OpenBible / TSK). Clic en una referencia para ir al pasaje.
@@ -319,7 +381,7 @@
   </div>
 
   <!-- Theme list first (its own file: no inline script, see the CSP above), then the app. -->
-  <script src="themes.js?v=release-port1"></script>
-  <script src="app.v7.js?v=release-port1"></script>
+  <script src="themes.js?v=nav-tiles3"></script>
+  <script src="app.v7.js?v=nav-tiles3"></script>
 </body>
 </html>

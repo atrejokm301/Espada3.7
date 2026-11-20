@@ -126,13 +126,16 @@ scenario("Bible chapter cannot be read → Spanish error in the reading pane; «
   eq(errIn("bible-content"), null, "error gone");
 });
 
-scenario("Bible error «Elegir otro módulo» focuses the Bible selector", () => {
+scenario("Bible error «Elegir otro módulo» opens the Bible list", () => {
   boot({ storage: on("biblia") });
   H.overrides.get_bible_chapter = () => ({ err: "no such table: Bible" });
   changeSelect($id("sel-chapter"), "4");
   settle();
   clickEl(errIn("bible-content").querySelector('[data-error-act="choose"]'));
-  assert(document.activeElement === $id("sel-bible"), "Bible selector focused");
+  // The native select is hidden now (focusing it showed nothing): the Bible dropdown opens instead.
+  eq($id("glass-menu").dataset.for, "sel-bible", "Bible list open");
+  assert(!$id("glass-menu").classList.contains("hidden"), "menu visible");
+  assert($id("glass-menu").contains(document.activeElement), "focus inside the list");
 });
 
 scenario("Word lookup fails → side pane says it in Spanish (raw text only as detail)", () => {
