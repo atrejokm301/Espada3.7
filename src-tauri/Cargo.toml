@@ -1,6 +1,6 @@
 [package]
 name = "espada3_7"
-version = "3.7.0"
+version = "3.7.1"
 description = "Espada3.7 — Asignación del Cielo Bible (macOS)"
 authors = ["Asignación del Cielo"]
 edition = "2021"

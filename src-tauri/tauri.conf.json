@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Espada3.7",
-  "version": "3.7.0",
+  "version": "3.7.1",
   "identifier": "com.asignaciondelcielo.espada37",
   "build": {
     "frontendDist": "../ui",
